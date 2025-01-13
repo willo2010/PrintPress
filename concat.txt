@@ -1,0 +1,5062 @@
+using PrintPress.Controller;
+
+namespace PrintPress
+{
+    internal static class Program
+    {
+        /// <summary>
+        ///  The main entry point for the application.
+        /// </summary>
+        [STAThread]
+        static void Main()
+        {
+            CommercialDataController.Instance.Initialise();
+            ClassifiedDataController.Instance.Initialise();
+
+            ApplicationConfiguration.Initialize();
+            Application.Run(new Launcher());
+        }
+    }
+}
+using Microsoft.Data.SqlClient;
+using PrintPress.Controller.Data;
+using PrintPress.Controller.Enum;
+using PrintPress.Data;
+using System.Data;
+using System.Net.Mail;
+
+namespace PrintPress.Controller
+{
+    public class ClassifiedDataController : DataController<ClassifiedDataController>
+    {
+        protected override ClassifiedTableSchema Tables { get { return new ClassifiedTableSchema(); } }
+
+        public override void Initialise()
+        {
+            Initialise("ClassifiedData");
+        }
+
+        protected override void VerifyAll()
+        {
+            VerifyTable(Tables.CredentialTable);
+        }
+        public bool ValidateCredentials(MailAddress mailAddress, string password, out string message, out EmployeeData employee)
+        {
+            message = "database error";
+            employee = default;
+
+            string encryptedPass = EncryptPassword(password);
+
+            CommandReturnState readState =  CommercialDataController.Instance.GetEmployee(mailAddress, out employee, out message);
+
+            switch (readState)
+            {
+                case CommandReturnState.NOTFOUND:
+                    message = "invalid credentials";
+                    return false;
+                case CommandReturnState.FAILED:
+                    message = "database error";
+                    return false;
+                default:
+                    break;
+            }
+
+            SqlCommandData<int> commandData = new SqlCommandData<int>()
+            {
+                queryString = "IF EXISTS (SELECT * FROM CREDENTIAL WHERE EmployeeID=@employeeID AND EncPassword=@encPassword) " +
+                    "BEGIN SELECT 1 END ELSE BEGIN SELECT 0 END",
+                sqlParams = [
+                    new SqlParameter("@employeeID", SqlDbType.NVarChar) { Value = employee.Id },
+                    new SqlParameter("@encPassword", SqlDbType.NVarChar) { Value = encryptedPass }],
+                readerFunc = reader => reader.GetInt32(0)
+            };
+
+            if (GetSingleResult(commandData, Tables.CredentialTable, out int result) == CommandReturnState.FAILED)
+            {
+                return false;
+            }
+
+            message = "invalid credentials";
+            return Convert.ToBoolean(result);
+        }
+
+        private string EncryptPassword(string password)
+        {
+            // IMPLEMENT
+            return password;
+        }
+
+        public bool AddCredentials(EmployeeData employee, string password)
+        {
+            CommercialDataController com = CommercialDataController.Instance;
+            bool commandSuccess = com.AddEmployee(employee, out int employeeID);
+            if (!commandSuccess) return commandSuccess;
+
+            return AddItem(Tables.CredentialTable, [employeeID.ToString(), password]);
+        }
+    }
+}
+using System.Data;
+using Microsoft.Data.SqlClient;
+using PrintPress.Controller.Data;
+using PrintPress.Data;
+using System.Net.Mail;
+using PrintPress.Data.Enum;
+using PrintPress.Controller.Enum;
+using PrintPress.Data.Builder;
+
+namespace PrintPress.Controller
+{
+    public class CommercialDataController : DataController<CommercialDataController>
+    {
+        protected override CommercialTableSchema Tables { get { return new CommercialTableSchema(); } }
+        public override void Initialise()
+        {
+            Initialise("CommercialData");
+        }
+
+        public CommandReturnState GetEmployee(MailAddress mailAddress, out EmployeeData employee, out string message)
+        {
+            employee = new EmployeeData();
+            message = "database error";
+            
+            if (!VerifyTable(Tables.Employee))
+            {
+                return CommandReturnState.FAILED;
+            }
+
+            SqlCommandData<EmployeeData> commandData = new SqlCommandData<EmployeeData>()
+            {
+                queryString = $"SELECT * FROM {Tables.Employee.Name} " +
+                $"JOIN {Tables.Person.Name} ON {Tables.Employee.Name}.PersonID={Tables.Person.Name}.PersonID " +
+                $"WHERE Email = @email",
+                sqlParams = [new SqlParameter("@email", SqlDbType.NVarChar) { Value = mailAddress.Address }],
+                readerFunc = reader =>
+                {
+                    int id = reader.GetInt32(1);
+                    string jobTitle = reader.GetString(2);
+
+                    GetPerson(id, out PersonalData person);
+
+                    if (!GetClearance(id, out Department[] clearance))
+                    {
+                        return new EmployeeData();
+                    }
+
+                    return new EmployeeData(id, person, jobTitle,clearance);
+                }
+            };
+
+            return GetSingleResult(commandData, out employee);
+        }
+
+        private CommandReturnState GetPerson(int id, out PersonalData person)
+        {
+            SqlCommandData<PersonalData> commandData = new SqlCommandData<PersonalData>()
+            {
+                queryString = $"SELECT * FROM {Tables.Person.Name} WHERE PersonID = @personID",
+                sqlParams = [new SqlParameter("@personID", SqlDbType.Int) { Value = id }],
+                readerFunc = reader =>
+                {
+                    GetAddress(reader.GetInt32(1), out Address address);
+
+                    return new PersonalData()
+                    {
+                        HomeAddress = address,
+                        FirstNames = reader.GetString(2),
+                        LastName = reader.GetString(3),
+                        MailAddress = new MailAddress(reader.GetString(4)),
+                        Phone = reader.GetString(5)
+                    };
+                }
+            };
+
+            return GetSingleResult(commandData, Tables.Person, out person);
+        }
+
+        private CommandReturnState GetAddress(int id, out Address address)
+        {
+            SqlCommandData<Address> commandData = new SqlCommandData<Address>()
+            {
+                queryString = $"SELECT * FROM {Tables.Address.Name} WHERE AddressID = @addressID",
+                sqlParams = [new SqlParameter("@addressID", SqlDbType.Int) { Value = id }],
+                readerFunc = reader =>
+                {
+                    return new Address()
+                    {
+                        HouseNameOrNumber = reader.GetString(1),
+                        Road = reader.GetString(2),
+                        City = reader.GetString(3),
+                        County = reader.GetString(4),
+                        Country = reader.GetString(5),
+                        Postcode = reader.GetString(6),
+                    };
+                }
+            };
+
+            return GetSingleResult(commandData, Tables.Address, out address);
+        }
+
+        public CommandReturnState GetAdverts(int employeeID, out AdvertData[] adverts, out string message)
+        {
+            adverts = [];
+            message = "database error";
+
+            SqlCommandData<AdvertData> commandData = new SqlCommandData<AdvertData>()
+            {
+                queryString = $"SELECT * FROM {Tables.Advert.Name} " +
+                $"JOIN {Tables.Content.Name} ON {Tables.Advert.Name}.ContentID = {Tables.Content.Name}.ContentID " +
+                $"JOIN {Tables.Person.Name} ON {Tables.Person.Name}.PersonID = {Tables.Advert.Name}.ContactID " +
+                $"JOIN {Tables.Address.Name} ON {Tables.Address.Name}.AddressID = {Tables.Person.Name}.AddressID " +
+                $"WHERE {Tables.Content.Name}.EmployeeID = @employeeID",
+                sqlParams = [new SqlParameter("@employeeID", SqlDbType.Int) { Value = employeeID }],
+                readerFunc = reader =>
+                {
+                    AddressBuilder addressBuilder = new AddressBuilder();
+                    addressBuilder.HouseNameOrNumber = reader.GetString("Number_Name");
+                    addressBuilder.Road = reader.GetString("Road");
+                    addressBuilder.City = reader.GetString("City");
+                    addressBuilder.County = reader.GetString("County");
+                    addressBuilder.Country = reader.GetString("Country");
+                    addressBuilder.Postcode = reader.GetString("Postcode");
+
+                    PersonalDataBuilder pdBuilder = new PersonalDataBuilder();
+                    pdBuilder.Address = addressBuilder.ToAddress();
+                    pdBuilder.FirstNames = addressBuilder.Road = reader.GetString("FirstNames");
+                    pdBuilder.LastName = addressBuilder.Road = reader.GetString("LastName");
+                    pdBuilder.Email = addressBuilder.Road = reader.GetString("Email");
+                    pdBuilder.Phone = addressBuilder.Road = reader.GetString("PhoneNum");
+
+                    AdvertBuilder advertBuilder = new AdvertBuilder();
+                    advertBuilder.ContentID = reader.GetInt32("ContentID");
+                    advertBuilder.Text = reader.GetString("Text");
+                    advertBuilder.Title = reader.GetString("Title");
+                    byte[] bytes = (byte[])reader["Image"];
+                    advertBuilder.Notes = reader.GetString("Notes");
+                    advertBuilder.Comments = reader.GetString("Comments");
+                    advertBuilder.State = (ContentState)reader.GetInt32("State");
+                    advertBuilder.LastSaved = reader.GetDateTime("LastSaved");
+                    advertBuilder.Contact = pdBuilder.ToPersonalData();
+
+                    return advertBuilder.ToAdvertData();
+                }
+            };
+
+            return GetMultiResult(commandData, out adverts);
+        }
+
+        public CommandReturnState GetStories(int employeeID, out StoryData[] stories, out string message)
+        {
+            stories = [];
+            message = "database error";
+
+            SqlCommandData<StoryData> commandData = new SqlCommandData<StoryData>()
+            {
+                queryString = $"SELECT * FROM {Tables.Story.Name} " +
+                $"JOIN {Tables.Content.Name} ON {Tables.Story.Name}.ContentID = {Tables.Content.Name}.ContentID " +
+                $"WHERE {Tables.Content.Name}.EmployeeID = @employeeID",
+                sqlParams = [new SqlParameter("@employeeID", SqlDbType.Int) { Value = employeeID }],
+                readerFunc = reader =>
+                {
+                    StoryBuilder builder = new StoryBuilder();
+
+                    builder.ContentID = reader.GetInt32("ContentID");
+                    builder.Text = reader.GetString("Text");
+                    builder.Title = reader.GetString("Title");
+                    byte[] bytes = (byte[])reader["Image"];
+                    builder.Notes = reader.GetString("Notes");
+                    builder.Comments = reader.GetString("Comments");
+                    builder.State = (ContentState)reader.GetInt32("State");
+                    builder.LastSaved = reader.GetDateTime("LastSaved");
+                    builder.Source = reader.GetString("Source");
+
+                    return builder.ToStoryData();
+                }
+            };
+
+            return GetMultiResult(commandData, out stories);
+        }
+
+        public bool AddEmployee(EmployeeData employee, out int autoId)
+        {
+            autoId = -1;
+
+            bool commandSuccess = AddPerson(employee.personalData, out int personId);
+            if (!commandSuccess) return commandSuccess;
+
+            commandSuccess = AddItemGetId(Tables.Employee,
+                [personId.ToString(), employee.jobTitle],
+                out autoId);
+
+            if (commandSuccess)
+            {
+                AddClearance(autoId, employee.clearance);
+            }
+
+            return commandSuccess;
+        }
+
+        private bool AddPerson(PersonalData person, out int autoId)
+        {
+            autoId = -1;
+
+            switch (EmailExists(person.MailAddress, out int result))
+            {
+                case CommandReturnState.FOUND:
+                    autoId = result;
+                    return true;
+                case CommandReturnState.FAILED:
+                    return false;
+                default:
+                    break;
+            }
+
+            bool commandSuccess = AddAddress(person.HomeAddress, out int addressId);
+            if (!commandSuccess)
+            {
+                return commandSuccess;
+            }
+
+            return AddItemGetId(Tables.Person, 
+                [addressId.ToString(), person.FirstNames, person.LastName, person.MailAddress.Address, person.Phone],
+                out autoId);
+        }
+
+        private bool AddAddress(Address? maybeAddress, out int autoId)
+        {
+            if (maybeAddress == null)
+            {
+                autoId = -1;
+                return true;
+            }
+            Address address = (Address)maybeAddress;
+            return AddItemGetId(Tables.Address,
+                [address.HouseNameOrNumber, address.Road, address.City, address.County, address.Country, address.Postcode],
+                out autoId);
+        }
+
+        private bool AddClearance(int employeeID, Department[] clearance)
+        {
+            bool failed = false;
+            foreach (Department department in clearance)
+            {
+                bool readSuccess = AddItem(Tables.Clearance, [employeeID.ToString(), DataTools.DepartmentFromID(department).ToString()]);
+                if (!readSuccess)
+                {
+                    failed = true;
+                }
+            }
+            return !failed;
+        }
+
+        private bool UpdateContent(ContentData content)
+        {
+            SqlCommandData<object> commandData = new SqlCommandData<object>()
+            {
+                queryString = $"UPDATE {Tables.Content.Name} SET Text = @text, Title = @title, Image = @image, Notes = @notes, Comments = @comments, State = @state, LastSaved = @lastSaved " +
+                $"WHERE ContentID = @contentID",
+                sqlParams = [
+                    new SqlParameter("@text", SqlDbType.VarChar) { Value = content.Text },
+                    new SqlParameter("@title", SqlDbType.VarChar) { Value = content.Title },
+                    new SqlParameter("@image", SqlDbType.VarBinary) { Value = DataTools.ImageToByteArray(content.Image) },
+                    new SqlParameter("@notes", SqlDbType.VarChar) { Value = content.Notes },
+                    new SqlParameter("@comments", SqlDbType.VarChar) { Value = content.Comments },
+                    new SqlParameter("@state", SqlDbType.Int) { Value = (int)content.State },
+                    new SqlParameter("@lastSaved", SqlDbType.DateTime) { Value = DateTime.Now },
+                    new SqlParameter("@contentID", SqlDbType.Int) { Value = content.ContentID }
+                ]
+            };
+
+            return ExecuteNonQuery(commandData);
+
+        }
+
+        public bool DeleteContent(int contentID)
+        {
+            SqlCommandData<object> commandData = new SqlCommandData<object>()
+            {
+                queryString = 
+                $"DELETE FROM {Tables.Content.Name} " +
+                $"WHERE ContentID = @contentID; " +
+                $"DELETE FROM {Tables.Advert.Name} " +
+                $"WHERE ContentID = @contentID; " +
+                $"DELETE FROM {Tables.Story.Name} " +
+                $"WHERE ContentID = @contentID; ",
+                sqlParams = [
+                    new SqlParameter("@contentID", SqlDbType.Int) { Value = contentID }
+                ]
+            };
+
+            return ExecuteNonQuery(commandData);
+        }
+
+        public bool UpdateStory(StoryData storyData)
+        {
+            if (!UpdateContent(storyData))
+            {
+                return false;
+            }
+
+            SqlCommandData<object> commandData = new SqlCommandData<object>()
+            {
+                queryString = $"UPDATE {Tables.Story.Name} SET Source = @source " +
+                $"WHERE ContentID = @contentID",
+                sqlParams = [
+                    new SqlParameter("@source", SqlDbType.VarChar) { Value = storyData.Sources },
+                    new SqlParameter("@contentID", SqlDbType.Int) { Value = storyData.ContentID }
+                ]    
+            };
+            return ExecuteNonQuery(commandData);
+        }
+
+        public bool AddContent(ContentData content, out int autoId)
+        {
+            autoId = -1;
+            
+            bool success = AddItemGetId(Tables.Content,
+                [content.Assigned.Id.ToString(), content.Text, content.Title, DataTools.ImageToByteArray(content.Image), 
+                content.Notes, content.Comments, ((int)content.State).ToString(), DateTime.Now],
+                out int itemAutoId);
+
+            if (success)
+            {
+                autoId = itemAutoId;
+                return true;
+            }
+            return false;
+        }
+
+        public bool AllocateStory(int employeeId, out int autoId)
+        {
+            autoId = -1;
+
+            StoryBuilder builder = new StoryBuilder();
+            builder.Assigned = new EmployeeData(employeeId);
+            StoryData story = builder.ToStoryData();
+
+            if (!AddContent(story, out autoId))
+            {
+                return false;
+            }
+            return AddItem(Tables.Story,
+                [autoId, story.Sources]);
+        }
+
+        public bool AllocateAdvert(int employeeID, out int autoId)
+        {
+            autoId = -1;
+
+            AdvertBuilder builder = new AdvertBuilder();
+            builder.Assigned = new EmployeeData(employeeID);
+            AdvertData advert = builder.ToAdvertData();
+
+            if (!AddContent(advert, out int contentAutoId))
+            {
+                return false;
+            }
+            if (!AddPerson(advert.Contact, out int contactAutoId))
+            {
+                return false;
+            }
+            return AddItemGetId(Tables.Story,
+                [contentAutoId, contactAutoId],
+                out autoId);
+        }
+
+        private CommandReturnState EmailExists(MailAddress email, out int id)
+        {
+            id = -1;
+            SqlCommandData<int> query = new SqlCommandData<int>(
+                $"SELECT PersonID FROM {Tables.Person.Name} WHERE Email = @email",
+                [new SqlParameter("@email", SqlDbType.VarChar) { Value = email }],
+                reader => reader.GetInt32(0));
+
+            CommandReturnState crs = GetSingleResult(query, out int result);
+            if (crs == CommandReturnState.FOUND)
+            {
+                id = result;
+            }
+            return crs;
+        }
+
+        private bool GetClearance(int id, out Department[] clearance)
+        {
+            SqlCommandData<Department> commandData = new SqlCommandData<Department>()
+            {
+                queryString = $"SELECT DepartmentID FROM {Tables.Clearance.Name} " +
+                $"WHERE {Tables.Clearance.Name}.EmployeeID = @employeeID",
+                sqlParams = [new SqlParameter("@employeeID", SqlDbType.Int) { Value = id }],
+                readerFunc = reader =>
+                {
+                    return DataTools.DepartmentFromID(reader.GetInt32(0));
+                }
+            };
+
+            CommandReturnState state = GetMultiResult(commandData, Tables.Clearance, out clearance);
+            if (state == CommandReturnState.FOUND)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        protected override void VerifyAll()
+        {
+            VerifyTable(Tables.Employee);
+            VerifyTable(Tables.Person);
+            VerifyTable(Tables.Address);
+            VerifyTable(Tables.Clearance);
+            VerifyTable(Tables.Content);
+            VerifyTable(Tables.Story);
+            VerifyTable(Tables.Advert);
+        }
+    }
+}
+using Microsoft.Data.SqlClient;
+using PrintPress.Controller.Data;
+using PrintPress.Controller.Enum;
+using PrintPress.Data;
+using System.Data;
+using System.Text;
+
+namespace PrintPress.Controller
+{
+    public abstract class DataController<T1>
+        where T1 : DataController<T1>, new()
+    {
+        #region Singleton implementation
+
+        protected static bool _initialised = false;
+        private static T1? _instance;
+        protected abstract object Tables { get; }
+
+        public static T1 Instance
+        {
+            get
+            {
+                if (_instance == null)
+                {
+                    _instance = new T1();
+                }
+                return _instance;
+            }
+        }
+
+        public abstract void Initialise();
+        protected void Initialise(string className)
+        {
+            _className = className;
+            _defaultConnectionBuilder.InitialCatalog = DatabaseName;
+            VerifyDatabase();
+            VerifyAll();
+            _initialised = true;
+        }
+
+        #endregion
+        #region Abstract database functionality
+
+        private const string connectionStringBase = "Server=MAINFRAME\\SQLEXPRESS;Integrated security=SSPI;Encrypt=False;TrustServerCertificate=True";
+        protected SqlConnectionStringBuilder _defaultConnectionBuilder = new SqlConnectionStringBuilder(connectionStringBase);
+        private string _className = string.Empty;
+        private string rootPath = "C:\\Program Files\\PrintPress\\";
+
+        private string DatabaseName
+        {
+            get
+            {
+                return _className + "DB";
+            }
+        }
+        private string DatabasePath 
+        { 
+            get
+            {
+                return @$"{rootPath}{DatabaseName}Data.mdf";
+            }
+        }
+
+        protected virtual bool ExecuteNonQuery<C>(SqlCommandData<C> nonQuery, string? overrideDb = null)
+        {
+            return Execute(nonQuery, out _, command => { command.ExecuteNonQuery(); return []; }, overrideDb);
+        }
+
+        protected bool ExecuteQuery<C>(SqlCommandData<C> query, out C[] values, string? overrideDb = null)
+        {
+            return Execute(query, out values,
+                command =>
+                {
+                    List<C> valsList = new List<C>();
+                    using (SqlDataReader reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            valsList.Add(query.readerFunc(reader));
+                        }
+                    }
+                    return valsList.ToArray();
+                },
+                overrideDb);
+        }
+
+        private bool Execute<C>(SqlCommandData<C> query, out C[] values, Func<SqlCommand, C[]> executeFunc, string? overrideDb = null)
+        {
+            values = [];
+
+            SqlConnectionStringBuilder localConnectionBuilder = GetConnectionBuilder(overrideDb);
+
+            using (SqlConnection connection = new SqlConnection(localConnectionBuilder.ConnectionString))
+            {
+                SqlCommand command = new SqlCommand(query.queryString, connection);
+                foreach (var param in query.sqlParams)
+                {
+                    command.Parameters.Add(param);
+                }
+
+                try
+                {
+                    connection.Open();
+                    values = executeFunc(command);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(ex.ToString());
+                    return false;
+                }
+
+                return true;
+            }
+        }
+
+        private SqlConnectionStringBuilder GetConnectionBuilder(string? overrideDb = null)
+        {
+            SqlConnectionStringBuilder localConnectionBuilder = _defaultConnectionBuilder;
+            if (overrideDb != null)
+            {
+                localConnectionBuilder = new SqlConnectionStringBuilder(connectionStringBase);
+                localConnectionBuilder.InitialCatalog = overrideDb;
+            }
+            return localConnectionBuilder;
+        }
+
+        protected bool VerifyDatabase()
+        {
+            string dbName = _defaultConnectionBuilder.InitialCatalog;
+            
+            if (DatabaseExists()) return true;
+            if (TryCreateDatabase()) return true;
+
+            return false;
+        }
+
+        private bool DatabaseExists()
+        {
+            SqlCommandData<int> commandData = new SqlCommandData<int>()
+            {
+                queryString = $"IF EXISTS" +
+                $"(SELECT 1 FROM sys.databases WHERE name = @databaseName AND state_desc = 'ONLINE') " +
+                $"BEGIN SELECT 1 END " +
+                $"ELSE BEGIN SELECT 0 END",
+                sqlParams = [new SqlParameter("@databaseName", SqlDbType.NVarChar) { Value = DatabaseName }],
+                readerFunc = reader => reader.GetInt32(0)
+            };
+
+            if (GetSingleResult(commandData, out int result) == CommandReturnState.NOTFOUND)
+            {
+                return false;
+            }
+
+            return Convert.ToBoolean(result);
+        }
+
+        private bool TryCreateDatabase()
+        {
+            // SQL to drop and recreate the database
+            string nonQuery = @$"
+                IF EXISTS (
+                    SELECT 1 
+                    FROM sys.databases 
+                    WHERE name = '{DatabaseName}'
+                    AND state_desc = 'ONLINE')
+
+                BEGIN
+                    DROP DATABASE [{DatabaseName}];
+                END
+        
+                CREATE DATABASE [{DatabaseName}] ON PRIMARY 
+                (
+                    NAME = '{_className + "_Data"}',
+                    FILENAME = '{DatabasePath}',
+                    SIZE = 2MB, MAXSIZE = 10MB, FILEGROWTH = 10%
+                )
+                LOG ON 
+                (
+                    NAME = '{_className}{"_DBLog"}',
+                    FILENAME = '{rootPath}{_className}{"_DBLog.ldf"}',
+                    SIZE = 1MB, MAXSIZE = 5MB, FILEGROWTH = 10%
+                )";
+
+            // SQL Command Data
+            SqlCommandData<object> nonQueryData = new SqlCommandData<object>
+            {
+                queryString = nonQuery,
+                sqlParams = []
+            };
+
+            // Execute the SQL command
+            return ExecuteNonQuery(nonQueryData, "master");
+        }
+        protected abstract void VerifyAll();
+        protected bool VerifyTable(TableSchema schema)
+        {
+            SqlCommandData<int> query = new SqlCommandData<int>()
+            {
+                queryString = $"IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '{schema.Name}') " +
+                              "BEGIN SELECT 1 END ELSE BEGIN SELECT 0 END",
+                sqlParams = [],
+                readerFunc = reader => reader.GetInt32(0)
+            };
+
+            bool readSuccess = ExecuteQuery(query, out int[] tableExists);
+
+            if (!readSuccess || tableExists.Length < 1)
+            {
+                return false;
+            }
+            if (Convert.ToBoolean(tableExists[0]))
+            {
+                return true;
+            }
+            SqlCommandData<object> queryData = new SqlCommandData<object>(
+                $"IF OBJECT_ID('{schema.Name}', 'U') IS NOT NULL DROP TABLE {schema.Name}; " +
+                $"CREATE TABLE {schema.Name} {DataTools.SchemaString(schema.Columns)}",
+                [],
+                null);
+            if (ExecuteNonQuery(queryData))
+            {
+                return true;
+            }
+              
+            return false;
+        }
+
+        protected bool AddItemGetId(TableSchema schema, object[] values, out int autoId)
+        {
+            int itemCount = values.Length;
+
+            string[] paramPh = DataTools.GenerateParameterPlaceholders(itemCount);
+            string valueParams = DataTools.SchemaValuesString(paramPh);
+
+            SqlParameter[] sqlParams = new SqlParameter[itemCount];
+            for (int i = 0; i < itemCount; i++)
+            {
+                sqlParams[i] = new SqlParameter(paramPh[i], schema.Columns[i + 1][1]) { Value = values[i] };
+            }
+
+            SqlCommandData<int> commandData = new SqlCommandData<int>(
+                @$"INSERT INTO {schema.Name} OUTPUT Inserted.{schema.Columns[0][0]} VALUES {valueParams}",
+                sqlParams,
+                reader => reader.GetInt32(0));
+
+            if (GetSingleResult(commandData, schema, out autoId) == CommandReturnState.FOUND)
+            {
+                return true;
+            }
+            return false;
+        }
+
+        protected bool AddItem(TableSchema schema, object[] values)
+        {
+            int itemCount = schema.Columns.Length;
+
+            string[] paramPh = DataTools.GenerateParameterPlaceholders(schema.Columns.Length);
+            string valueParams = DataTools.SchemaValuesString(paramPh);
+
+            SqlParameter[] sqlParams = new SqlParameter[itemCount];
+            for (int i = 0; i < itemCount; i++)
+            {
+                sqlParams[i] = new SqlParameter(paramPh[i], schema.Columns[i]) { Value = values[i] };
+            }
+
+            SqlCommandData<Address> commandData = new SqlCommandData<Address>(
+                @$"INSERT INTO {schema.Name} VALUES {valueParams}",
+                sqlParams);
+
+            return ExecuteNonQuery(commandData);
+        }
+
+        protected bool DeleteItem(TableSchema schema, string[] values)
+        {
+            int itemCount = schema.Columns.Length;
+
+            string[] paramPh = DataTools.GenerateParameterPlaceholders(schema.Columns.Length);
+            string valueParams = DataTools.SchemaConditionString(schema.Columns, paramPh);
+
+            SqlParameter[] sqlParams = new SqlParameter[itemCount];
+            for (int i = 0; i < itemCount; i++)
+            {
+                sqlParams[i] = new SqlParameter(paramPh[i], schema.Columns[i]) { Value = values[i] };
+            }
+
+            SqlCommandData<Address> commandData = new SqlCommandData<Address>(
+                @$"DELETE FROM {schema.Name} WHERE {valueParams}",
+                sqlParams);
+
+            return ExecuteNonQuery(commandData);
+        }
+
+        protected CommandReturnState GetSingleResult<C>(SqlCommandData<C> commandData, TableSchema tableSchema, out C result) where C : new()
+        {
+            result = new C();
+
+            if (!VerifyTable(tableSchema))
+            {
+                return CommandReturnState.FAILED;
+            }
+
+            return GetSingleResult(commandData, out result);
+        }
+
+        protected CommandReturnState GetSingleResult<C>(SqlCommandData<C> commandData, out C result)
+        {
+            result = default;
+
+            bool readSuccess = ExecuteQuery(commandData, out C[] results);
+
+            if (!readSuccess)
+            {
+                return CommandReturnState.FAILED;
+            }
+            else if (results.Length == 0)
+            {
+                return CommandReturnState.NOTFOUND;
+            }
+
+            result = results[0];
+            return CommandReturnState.FOUND;
+        }
+
+        protected CommandReturnState GetMultiResult<C>(SqlCommandData<C> commandData, TableSchema tableSchema, out C[] results)
+        {
+            if (!VerifyTable(tableSchema))
+            {
+                results = [];
+                return CommandReturnState.FAILED;
+            }
+
+            return GetMultiResult(commandData, out results);
+        }
+        protected CommandReturnState GetMultiResult<C>(SqlCommandData<C> commandData,  out C[] results)
+        {
+            bool readSuccess = ExecuteQuery(commandData, out results);
+
+            if (!readSuccess)
+            {
+                return CommandReturnState.FAILED;
+            }
+            else if (results.Length == 0)
+            {
+                return CommandReturnState.NOTFOUND;
+            }
+            return CommandReturnState.FOUND;
+        }
+
+        public DataTable GetData(string sqlCommand)
+        {
+            SqlConnection connection = new SqlConnection(_defaultConnectionBuilder.ConnectionString);
+
+            SqlCommand command = new SqlCommand(sqlCommand, connection);
+            SqlDataAdapter adapter = new SqlDataAdapter();
+            adapter.SelectCommand = command;
+
+            DataTable table = new DataTable();
+            table.Locale = System.Globalization.CultureInfo.InvariantCulture;
+            adapter.Fill(table);
+
+            return table;
+        }
+
+        public CommandReturnState SendSql(string sqlString, out string result)
+        {
+            SqlCommandData<string> commandData = new SqlCommandData<string>(
+                sqlString,
+                [],
+                reader => {
+                    StringBuilder sb = new StringBuilder();
+
+                    for (int i = 0; i < reader.FieldCount; i++)
+                    {
+                        switch (reader.GetDataTypeName(i))
+                        {
+                            case "int":
+                                sb.Append(reader.GetInt32(i).ToString());
+                                break;
+                            case "nvarchar":
+                                sb.Append(reader.GetString(i));
+                                break;
+
+                        }
+                        sb.Append(", ");
+                    }
+                    sb.Remove(sb.Length - 2, 2);
+                    return sb.ToString();
+                });
+
+            CommandReturnState resultState = GetMultiResult(commandData, out string[] results);
+
+            switch (resultState)
+            {
+                case CommandReturnState.FAILED:
+                case CommandReturnState.NOTFOUND:
+                    result = string.Empty;
+                    return resultState;
+                default:
+                    break;
+            }
+
+            StringBuilder resultBuilder = new StringBuilder(results[0]);
+            for (int i = 1; i < results.Length; i++)
+            {
+                resultBuilder.Append(results[i]);
+            }
+
+            result = resultBuilder.ToString();
+            return CommandReturnState.FOUND;
+        }
+        #endregion
+    }
+}
+namespace PrintPress.Controller.Data
+{
+    public class ClassifiedTableSchema
+    {
+        public TableSchema CredentialTable { get { return credentialTable; } }
+
+        private static readonly TableSchema credentialTable = new TableSchema(
+            "CREDENTIAL",
+            [
+                ["EmployeeID", "INT PRIMARY KEY"],
+                ["EncPassword", "NVARCHAR(30) NOT NULL"]
+            ]);
+    }
+}
+using System.Data;
+
+namespace PrintPress.Controller.Data
+{
+    internal struct ColumnTypePair
+    {
+        public string column;
+        public SqlDbType type;
+    }
+}
+using System.Data;
+
+namespace PrintPress.Controller.Data
+{
+    public class CommercialTableSchema
+    {
+        public TableSchema Employee { get { return employeeTable; } }
+        public TableSchema Person { get { return personTable; } }
+        public TableSchema Address { get { return addressTable; } }
+        public TableSchema Clearance { get { return clearanceTable; } }
+        public TableSchema Content { get { return contentTable; } }
+        public TableSchema Story { get { return storyTable; } }
+        public TableSchema Advert { get { return advertTable; } }
+
+        private static readonly TableSchema employeeTable = new TableSchema(
+            "EMPLOYEE",
+            [
+                ["EmployeeID", "INT IDENTITY(1,1) PRIMARY KEY"],
+                ["PersonID", "INT NOT NULL"],
+                ["JobTitle", "NVARCHAR(20) NOT NULL"]
+            ]);
+
+        private static readonly TableSchema personTable = new TableSchema(
+            "PERSONALDATA",
+            [
+                ["PersonID", "INT IDENTITY(1,1) PRIMARY KEY"],
+                ["AddressID", "INT"],
+                ["FirstNames", "NVARCHAR(30) NOT NULL"],
+                ["LastName", "NVARCHAR(20) NOT NULL"],
+                ["Email", "NVARCHAR(50) NOT NULL UNIQUE"],
+                ["PhoneNum", "NVARCHAR(20)"]
+            ]);
+
+        public static readonly TableSchema addressTable = new TableSchema(
+            "ADDRESS",
+            [
+                ["AddressID", "INT IDENTITY(1,1) PRIMARY KEY"],
+                ["Number_Name", "NVARCHAR(30) NOT NULL"],
+                ["Road", "NVARCHAR(30) NOT NULL"],
+                ["City", "NVARCHAR(30) NOT NULL"],
+                ["County", "NVARCHAR(30) NOT NULL"],
+                ["Country", "NVARCHAR(30) NOT NULL"],
+                ["Postcode", "NVARCHAR(30) NOT NULL"]
+            ]);
+
+        public static readonly TableSchema clearanceTable = new TableSchema(
+            "CLEARANCE",
+            [
+                ["EmployeeID", "INT NOT NULL"],
+                ["DepartmentID", "INT NOT NULL"]
+            ]);
+
+        private static readonly TableSchema contentTable = new TableSchema(
+            "CONTENT",
+            [
+                ["ContentID", "INT IDENTITY(1,1) PRIMARY KEY"],
+                ["EmployeeID", "INT NOT NULL"],
+                ["Text", "NVARCHAR(4000) NOT NULL"],
+                ["Title", "NVARCHAR(100) NOT NULL"],
+                ["Image", "VARBINARY(MAX) NOT NULL"],
+                ["Notes", "NVARCHAR(2000) NOT NULL"],
+                ["Comments", "NVARCHAR(2000) NOT NULL"],
+                ["State", "INT NOT NULL"],
+                ["LastSaved", "DATETIME NOT NULL"]
+            ]);
+
+        private static readonly TableSchema storyTable = new TableSchema(
+           "STORY",
+           [
+                ["ContentID", "INT PRIMARY KEY"],
+                ["Source", "VARCHAR(100) NOT NULL"]
+           ]);
+
+        private static readonly TableSchema advertTable = new TableSchema(
+            "ADVERT",
+            [
+                ["ContentID", "INT PRIMARY KEY"],
+                ["ContactID", "INT NOT NULL"]
+            ]);
+    }
+}
+using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore.Metadata.Internal;
+using PrintPress.Data.Enum;
+using System.Data;
+using System.Text;
+
+namespace PrintPress.Controller.Data
+{
+    internal class DataTools
+    {
+        public static string SchemaString(string[][] columns)
+        {
+            if (columns == null || columns.Length == 0)
+            {
+                return string.Empty;
+            }
+            StringBuilder sb = new StringBuilder($"({columns[0][0]} {columns[0][1]}");
+            for (int i = 1; i < columns.Length; i++)
+            {
+                sb.Append($",{columns[i][0]} {columns[i][1]}");
+            }
+            sb.Append(")");
+            return sb.ToString();
+        }
+
+        public static string SchemaValuesString(string[] dataLabel)
+        {
+            if (dataLabel == null || dataLabel.Length == 0)
+            {
+                return string.Empty;
+            }
+            StringBuilder sb = new StringBuilder($"({dataLabel[0]}");
+            for (int i = 1; i < dataLabel.Length; i++)
+            {
+                sb.Append($", {dataLabel[i]}");
+            }
+            sb.Append(")");
+            return sb.ToString();
+        }
+
+        public static string SchemaConditionString(string[][] columns, string[] dataLabel)
+        {
+            if (columns == null || columns.Length == 0)
+            {
+                return string.Empty;
+            }
+            StringBuilder sb = new StringBuilder($"{columns[0][0]}={dataLabel[0]}");
+            for (int i = 1; i < columns.Length; i++)
+            {
+                sb.Append($" AND {columns[i][0]}={dataLabel[i]}");
+            }
+            return sb.ToString();
+        }
+
+        public static string[] GenerateParameterPlaceholders(int length)
+        {
+            List<string> placeholders = new List<string>();
+            for (int i = 0; i < length; i++)
+            {
+                placeholders.Add($"@item{i.ToString()}");
+            }
+            return placeholders.ToArray();
+        }
+
+        public static bool DepartmentString(Department department, out string text)
+        {
+            switch (department)
+            {
+                case Department.Accounts:
+                    text = "Accounts";
+                    return true;
+                case Department.Admin:
+                    text = "Admin";
+                    return true;
+                case Department.Editing:
+                    text = "Editing";
+                    return true;
+                case Department.Journalism:
+                    text = "Journalism";
+                    return true;
+                case Department.Marketing:
+                    text = "Marketing";
+                    return true;
+                case Department.Processing:
+                    text = "Processing";
+                    return true;
+                default:
+                    text = string.Empty;
+                    return false;
+            }
+        }
+
+        public static bool DepartmentString(string text, out Department department)
+        {
+            switch (text.ToLower())
+            {
+                case "accounts":
+                    department = Department.Accounts;
+                    return true;
+                case "admin":
+                    department = Department.Admin;
+                    return true;
+                case "editing":
+                    department = Department.Editing;
+                    return true;
+                case "journalism":
+                    department = Department.Journalism;
+                    return true;
+                case "marketing":
+                    department = Department.Marketing;
+                    return true;
+                case "processing":
+                    department = Department.Processing;
+                    return true;
+                default:
+                    department = Department.Journalism;
+                    return false;
+            }
+        }
+
+        public static byte[] ImageToByteArray(Image? image)
+        {
+            if (image == null) return [];
+            using (MemoryStream ms = new MemoryStream())
+            {
+                image.Save(ms, image.RawFormat);
+                return ms.ToArray();
+            }
+        }
+
+        private static Dictionary<int, Department> departmentIDs = new Dictionary<int, Department>()
+        {
+            { 0, Department.Admin },
+            { 1, Department.Accounts },
+            { 2, Department.Editing },
+            { 3, Department.Journalism },
+            { 4, Department.Marketing },
+            { 5, Department.Processing }
+        };
+
+        public static Department DepartmentFromID(int id)
+        {
+            return departmentIDs[id];
+        }
+
+        public static int DepartmentFromID(Department department)
+        {
+            return departmentIDs.FirstOrDefault(x => x.Value == department).Key;
+        }
+    }
+}
+using Microsoft.Data.SqlClient;
+
+namespace PrintPress.Controller.Data
+{
+    public struct SqlCommandData<C>
+    {
+        public string queryString;
+        public SqlParameter[] sqlParams = [];
+        public Func<SqlDataReader, C>? readerFunc;
+
+        public SqlCommandData(string queryString, SqlParameter[] sqlParams)
+        {
+            this.queryString = queryString;
+            this.sqlParams = sqlParams;
+        }
+        public SqlCommandData(string queryString, SqlParameter[] sqlParams, Func<SqlDataReader, C>? readerFunc)
+        {
+            this.queryString = queryString;
+            this.sqlParams = sqlParams;
+            this.readerFunc = readerFunc;
+        }
+    }
+}
+using System.Data;
+
+namespace PrintPress.Controller.Data
+{
+    public struct TableSchema
+    {
+        public string Name { get; init; }
+        public string[][] Columns { get; init; }
+        public TableSchema(string name, string[][] columns)
+        {
+            Name = name;
+            Columns = columns;
+        }
+    }
+}
+namespace PrintPress.Controller.Enum
+{
+    public enum CommandReturnState
+    {
+        FOUND,
+        NOTFOUND,
+        FAILED
+    }
+}
+namespace PrintPress.Data
+{
+    public struct Address
+    {
+        public string HouseNameOrNumber { get; init; } = string.Empty;
+        public string Road { get; init; } = string.Empty;
+        public string City { get; init; } = string.Empty;
+        public string County { get; init; } = string.Empty;
+        public string Country { get; init; } = string.Empty;
+        public string Postcode { get; init; } = string.Empty;
+
+        public Address(
+            string houseName,
+            string road,
+            string city,
+            string county,
+            string country,
+            string postcode)
+        {
+            HouseNameOrNumber = houseName;
+            Road = road;
+            City = city;
+            County = county;
+            Country = country;
+            Postcode = postcode;
+        }
+    }
+}
+using PrintPress.Data.Enum;
+
+namespace PrintPress.Data
+{
+    public class AdvertData : ContentData
+    {
+        public PersonalData Contact { get; init; }
+
+        public AdvertData(int id,
+            EmployeeData assigned,
+            string text, string title,
+            Image? image,
+            string notes,
+            string comments,
+            ContentState state,
+            DateTime lastSaved,
+            PersonalData contact) :
+            base(id, assigned, text, title, image, notes, comments, state, lastSaved)
+        {
+            Contact = contact;
+            Contact.DataChanged += OnDataChanged;
+        }
+    }
+}
+using PrintPress.Data.Enum;
+
+namespace PrintPress.Data
+{
+    public abstract class ContentData : Data
+    {
+        public int ContentID { get; init; } = -1;
+
+        protected EmployeeData _assigned = new EmployeeData();
+        public EmployeeData Assigned
+        {
+            get { return _assigned; }
+            set
+            {
+                _assigned = value;
+                OnDataChanged();
+            }
+        }
+
+        protected string _text = string.Empty;
+        public string Text
+        {
+            get { return _text; }
+            set
+            {
+                _text = value;
+                OnDataChanged();
+            }
+        }
+
+        protected string _title = string.Empty;
+        public string Title
+        {
+            get { return _title; }
+            set
+            {
+                _title = value;
+                OnDataChanged();
+            }
+        }
+
+        protected Image? _image = null;
+        public Image? Image
+        {
+            get { return _image; }
+            set
+            {
+                _image = value;
+                OnDataChanged();
+            }
+        }
+
+        protected string _notes = string.Empty;
+        public string Notes
+        {
+            get { return _notes; }
+            set
+            {
+                _notes = value;
+                OnDataChanged();
+            }
+        }
+
+        protected string _comments = string.Empty;
+        public string Comments
+        {
+            get { return _comments; }
+            set
+            {
+                _comments = value;
+                OnDataChanged();
+            }
+        }
+
+        protected ContentState _state = ContentState.IN_PROGRESS;
+        public ContentState State
+        {
+            get { return _state; }
+            set
+            {
+                _state = value;
+                OnDataChanged();
+            }
+        }
+        public DateTime LastSaved { get; set; }
+        public ContentData()
+        {
+            LastSaved = DateTime.Now;
+        }
+        private bool _localChanges = false;
+        public bool LocalChanges
+        {
+            get
+            {
+                return _localChanges;
+            }
+            set
+            {
+                _localChanges = value;
+                OnLocalChangesChanged();
+            }
+        }
+
+        public ContentData(int id, EmployeeData assigned, string text, string title, Image? image, string notes, string comments, ContentState state, DateTime lastSaved)
+        {
+            ContentID = id;
+            _assigned = assigned;
+            _text = text;
+            _title = title;
+            _image = image;
+            _notes = notes;
+            _comments = comments;
+            _state = state;
+            LastSaved = lastSaved;
+
+            DataChanged += SetLocalChangesTrue;
+        }
+
+        private void SetLocalChangesTrue(object? sender, EventArgs e)
+        {
+            LocalChanges = true;
+        }
+
+        public event EventHandler<EventArgs>? SaveStateChanged;
+        protected virtual void OnLocalChangesChanged()
+        {
+            SaveStateChanged?.Invoke(this, new EventArgs());
+        }
+    }
+}
+namespace PrintPress.Data
+{
+    public abstract class Data
+    {
+        public event EventHandler<EventArgs>? DataChanged;
+        protected virtual void OnDataChanged()
+        {
+            DataChanged?.Invoke(this, new EventArgs());
+        }
+        protected virtual void OnDataChanged(object? sender, EventArgs e)
+        {
+            DataChanged?.Invoke(sender, e);
+        }
+    }
+}
+using PrintPress.Data.Enum;
+
+namespace PrintPress.Data
+{
+    public class EmployeeData
+    {
+        public int Id { get; init; }
+        public PersonalData personalData;
+        public string jobTitle;
+        public Department[] clearance;
+
+        public EmployeeData()
+        {
+            Id = -1;
+            personalData = new PersonalData();
+            jobTitle = string.Empty;
+            clearance = Array.Empty<Department>();
+        }
+
+        public EmployeeData(int id)
+        {
+            Id = id;
+            personalData = new PersonalData();
+            jobTitle = string.Empty;
+            clearance = Array.Empty<Department>();
+        }
+
+        public EmployeeData(int id, PersonalData personalData,string jobTitle, Department[] clearance) 
+        {
+            Id = id;
+            this.personalData = personalData;
+            this.jobTitle = jobTitle;
+            this.clearance = clearance;
+        }
+
+        public bool HasClearance(Department department)
+        {
+            foreach (Department dept in clearance)
+            {
+                if (dept == department) return true;
+            }
+            return false;
+        }
+    }
+}
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Mail;
+
+namespace PrintPress.Data
+{
+    public class PersonalData : Data
+    {
+        private Address? _address;
+        public Address? HomeAddress
+        {
+            get
+            {
+                return _address;
+            }
+            set
+            {
+                _address = value;
+                OnDataChanged();
+            }
+        }
+        private string _firstNames;
+        public string FirstNames
+        {
+            get
+            {
+                return _firstNames;
+            }
+            set
+            {
+                _firstNames = value;
+                OnDataChanged();
+            }
+        }
+        private string _lastName;
+        public string LastName
+        {
+            get
+            {
+                return _lastName;
+            }
+            set
+            {
+                _lastName = value;
+                OnDataChanged();
+            }
+        }
+        private MailAddress _mailAddress;
+        public MailAddress MailAddress
+        {
+            get
+            {
+                return _mailAddress;
+            }
+            set
+            {
+                _mailAddress = value;
+                OnDataChanged();
+            }
+        }
+        private string _phone;
+        public string Phone
+        {
+            get
+            {
+                return _phone;
+            }
+            set
+            {
+                _phone = value;
+                OnDataChanged();
+            }
+        }
+
+        public PersonalData()
+        {
+            HomeAddress = new Address();
+            FirstNames = string.Empty;
+            LastName = string.Empty;
+            MailAddress = new MailAddress("null@null");
+            Phone = string.Empty;
+        }
+
+        public PersonalData(
+            Address? address,
+            string firstNames,
+            string lastName,
+            MailAddress mailAddress,
+            string phone)
+        {
+            HomeAddress = address;
+            FirstNames = firstNames;
+            LastName = lastName;
+            MailAddress = mailAddress;
+            Phone = phone;
+        }
+    }
+}
+using PrintPress.Data.Enum;
+
+namespace PrintPress.Data
+{
+    public class StoryData : ContentData
+    {
+        private string _source = string.Empty;
+        public string Sources
+        {
+            get
+            {
+                return _source;
+            }
+            set
+            {
+                _source = value;
+                OnSourceChanged();
+            }
+        }
+
+        public StoryData(int id,
+            EmployeeData assigned,
+            string text, string title,
+            Image? image,
+            string notes,
+            string comments,
+            ContentState state,
+            DateTime lastSaved,
+            string source) :
+            base(id, assigned, text, title, image, notes, comments, state, lastSaved)
+        {
+            _source = source;
+            SourceChanged += OnDataChanged;
+        }
+
+        public event EventHandler<EventArgs>? SourceChanged;
+        protected virtual void OnSourceChanged()
+        {
+            SourceChanged?.Invoke(this, new EventArgs());
+        }
+        protected virtual void OnSourceChanged(object? sender, EventArgs e)
+        {
+            SourceChanged?.Invoke(sender, e);
+        }
+    }
+}
+namespace PrintPress.Data.Builder
+{
+    public class AddressBuilder
+    {
+        public string HouseNameOrNumber { get; set; } = string.Empty;
+        public string Road { get; set; } = string.Empty;
+        public string City { get; set; } = string.Empty;
+        public string County { get; set; } = string.Empty;
+        public string Country { get; set; } = string.Empty;
+        public string Postcode { get; set; } = string.Empty;
+
+        public Address ToAddress()
+        {
+            return new Address
+                (HouseNameOrNumber,
+                Road, 
+                City, 
+                County, 
+                Country, 
+                Postcode);
+        }
+    }
+}
+using PrintPress.Data.Enum;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace PrintPress.Data.Builder
+{
+    public class AdvertBuilder : ContentBuilder
+    {
+        public PersonalData Contact { get; set; } = new PersonalData();
+
+        public AdvertData ToAdvertData()
+        {
+            return new AdvertData
+                (ContentID, Assigned, Text, Title, Image, Notes, Comments, State, LastSaved, Contact);
+        }
+    }
+}
+using PrintPress.Data.Enum;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace PrintPress.Data.Builder
+{
+    public abstract class ContentBuilder
+    {
+        public int ContentID { get; set; } = -1;
+        public EmployeeData Assigned { get; set; } = new EmployeeData();
+        public string Text { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public Image? Image { get; set; } = null;
+        public string Notes { get; set; } = string.Empty;
+        public string Comments { get; set; } = string.Empty;
+        public ContentState State { get; set; } = ContentState.IN_PROGRESS;
+        public DateTime LastSaved { get; set; } = DateTime.MinValue;
+    }
+}
+using PrintPress.Data.Enum;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Mail;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace PrintPress.Data.Builder
+{
+    public class PersonalDataBuilder
+    {
+        public Address Address { get; set; } = new Address();
+        public string FirstNames { get; set; } = string.Empty;
+        public string LastName { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string Phone { get; set; } = string.Empty;
+
+        public PersonalData ToPersonalData()
+        {
+            if (!MailAddress.TryCreate(Email, out MailAddress? mail))
+            {
+                return new PersonalData();
+            }
+
+            return new PersonalData(
+                Address,
+                FirstNames,
+                LastName,
+                mail,
+                Phone);
+        }
+    }
+}
+using PrintPress.Data.Enum;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace PrintPress.Data.Builder
+{
+    public class StoryBuilder : ContentBuilder
+    {
+        public string Source { get; set; } = string.Empty;
+
+        public StoryData ToStoryData()
+        {
+            return new StoryData
+                (ContentID, Assigned, Text, Title, Image, Notes, Comments, State, LastSaved, Source);
+        }
+    }
+}
+namespace PrintPress.Data.Enum
+{
+    public enum ContentState
+    {
+        IN_PROGRESS,
+        AWAITING_REVIEW,
+        RETURNED,
+        IN_USE,
+        RETIRED
+    }
+}
+namespace PrintPress.Data.Enum
+{
+    public enum Department
+    {
+        Accounts,
+        Admin,
+        Editing,
+        Journalism,
+        Marketing,
+        Processing
+    }
+}
+// <autogenerated />
+using System;
+using System.Reflection;
+[assembly: global::System.Runtime.Versioning.TargetFrameworkAttribute(".NETCoreApp,Version=v8.0", FrameworkDisplayName = ".NET 8.0")]
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by a tool.
+//     Runtime Version:4.0.30319.42000
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+using System;
+using System.Reflection;
+
+[assembly: System.Reflection.AssemblyCompanyAttribute("PrintPress")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+bfbf36da9bc363758c87b0b7165ef3fe63a8128c")]
+[assembly: System.Reflection.AssemblyProductAttribute("PrintPress")]
+[assembly: System.Reflection.AssemblyTitleAttribute("PrintPress")]
+[assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
+[assembly: System.Runtime.Versioning.TargetPlatformAttribute("Windows7.0")]
+[assembly: System.Runtime.Versioning.SupportedOSPlatformAttribute("Windows7.0")]
+
+// Generated by the MSBuild WriteCodeFragment class.
+
+// <auto-generated/>
+global using global::System;
+global using global::System.Collections.Generic;
+global using global::System.Drawing;
+global using global::System.IO;
+global using global::System.Linq;
+global using global::System.Net.Http;
+global using global::System.Threading;
+global using global::System.Threading.Tasks;
+global using global::System.Windows.Forms;
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by a tool.
+//     Runtime Version:4.0.30319.42000
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+namespace PrintPress.Properties {
+    using System;
+    
+    
+    /// <summary>
+    ///   A strongly-typed resource class, for looking up localized strings, etc.
+    /// </summary>
+    // This class was auto-generated by the StronglyTypedResourceBuilder
+    // class via a tool like ResGen or Visual Studio.
+    // To add or remove a member, edit your .ResX file then rerun ResGen
+    // with the /str option, or rebuild your VS project.
+    [global::System.CodeDom.Compiler.GeneratedCodeAttribute("System.Resources.Tools.StronglyTypedResourceBuilder", "17.0.0.0")]
+    [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+    [global::System.Runtime.CompilerServices.CompilerGeneratedAttribute()]
+    internal class Resources {
+        
+        private static global::System.Resources.ResourceManager resourceMan;
+        
+        private static global::System.Globalization.CultureInfo resourceCulture;
+        
+        [global::System.Diagnostics.CodeAnalysis.SuppressMessageAttribute("Microsoft.Performance", "CA1811:AvoidUncalledPrivateCode")]
+        internal Resources() {
+        }
+        
+        /// <summary>
+        ///   Returns the cached ResourceManager instance used by this class.
+        /// </summary>
+        [global::System.ComponentModel.EditorBrowsableAttribute(global::System.ComponentModel.EditorBrowsableState.Advanced)]
+        internal static global::System.Resources.ResourceManager ResourceManager {
+            get {
+                if (object.ReferenceEquals(resourceMan, null)) {
+                    global::System.Resources.ResourceManager temp = new global::System.Resources.ResourceManager("PrintPress.Properties.Resources", typeof(Resources).Assembly);
+                    resourceMan = temp;
+                }
+                return resourceMan;
+            }
+        }
+        
+        /// <summary>
+        ///   Overrides the current thread's CurrentUICulture property for all
+        ///   resource lookups using this strongly typed resource class.
+        /// </summary>
+        [global::System.ComponentModel.EditorBrowsableAttribute(global::System.ComponentModel.EditorBrowsableState.Advanced)]
+        internal static global::System.Globalization.CultureInfo Culture {
+            get {
+                return resourceCulture;
+            }
+            set {
+                resourceCulture = value;
+            }
+        }
+    }
+}
+using PrintPress.UIService;
+using PrintPress.UIService.Abstract;
+
+namespace PrintPress.UICommand
+{
+    internal abstract class Command<T> where T : ClientService<T>
+    {
+        // Abstract property for command name
+        public string Name { get { return GetType().Name; } }
+
+        public bool Undoable { get; init; }
+        protected bool AddToHistory { get; init; }
+        protected T Service { get; init; }
+
+        public Command(T clientService, bool undoable = false, bool addToHistory = true)
+        {
+            Undoable = undoable;
+            Service = clientService;
+            AddToHistory = addToHistory;
+        }
+        public void Execute()
+        {
+            if (TryExecute() && AddToHistory)
+            {
+                Service.ExecuteHistory.Push(this);
+            }
+        }
+        protected abstract bool TryExecute();
+        public void UndoExecute()
+        {
+            if (!Undoable)
+            {
+                return;
+            }
+            if (TryUndoExecute())
+            {
+                Service.UndoHistory.Push(this);
+            }
+        }
+        protected virtual bool TryUndoExecute() 
+        { 
+            return false;
+        }
+    }
+}
+using PrintPress.UI;
+using PrintPress.UIService;
+using PrintPress.UIService.Abstract;
+using System.Diagnostics;
+
+namespace PrintPress.UICommand.ContentCommand
+{
+    internal class ExitCommand<T> : Command<T> where T : ClientService<T>
+    {
+        ClientWindow window;
+        public ExitCommand(T clientService, ClientWindow clientWindow): base(clientService)
+        {
+            window = clientWindow;
+        }
+
+        protected override bool TryExecute()
+        {
+            try
+            {
+                window.Close();
+                Service.Close();
+            }
+            catch(Exception ex)
+            {
+                Debug.WriteLine(ex.Message);
+                return false;
+            }
+            return true;
+        }
+        protected override bool TryUndoExecute()
+        {
+            return false;
+        }
+    }
+}
+using PrintPress.UI;
+using PrintPress.UIService.Abstract;
+
+namespace PrintPress.UICommand.ContentCommand
+{
+    internal class RedoCommand<T> : Command<T> where T : ClientService<T>
+    {
+        public RedoCommand(T clientService): base(clientService, false, false)
+        {
+            
+        }
+
+        protected override bool TryExecute()
+        {
+            Command<T>? command;
+
+            while (Service.UndoHistory.TryPop(out command))
+            {
+                if (command != null && command.Undoable)
+                {
+                    command.UndoExecute();
+                    break;
+                }
+            }
+            return false;
+        }
+
+        protected override bool TryUndoExecute()
+        {
+            return false;
+        }
+    }
+}
+using PrintPress.UIService.Abstract;
+
+namespace PrintPress.UICommand.ContentCommand
+{
+    internal class UndoCommand<T> : Command<T> where T : ClientService<T>
+    {
+        public UndoCommand(T clientService): base(clientService, false, false)
+        {
+            
+        }
+
+        protected override bool TryExecute()
+        {
+            Command<T>? command;
+
+            while (Service.ExecuteHistory.TryPop(out command))
+            {
+                if (command != null && command.Undoable)
+                {
+                    command.UndoExecute();
+                    break;
+                }
+            }
+            return false;
+        }
+
+        protected override bool TryUndoExecute()
+        {
+            return false;
+        }
+    }
+}
+using PrintPress.UIService.Abstract;
+using static System.Windows.Forms.ListView;
+
+namespace PrintPress.UICommand.ContentCommand
+{
+    internal class UpdateActiveContentCommand<T> : Command<T> where T : ContentService<T>
+    {
+        SelectedListViewItemCollection _items;
+        public UpdateActiveContentCommand(T contentService, SelectedListViewItemCollection items) : base(contentService)
+        {
+            _items = items;
+        }
+        protected override bool TryExecute()
+        {
+            if (_items != null && _items.Count > 0)
+            {
+                object? contentIdObj = _items[0].Tag;
+                if (contentIdObj == null)
+                {
+                    return false;
+                }
+                if (contentIdObj is not int)
+                {
+                    return false;
+                }
+                Service.ActiveID = (int)contentIdObj;
+            }
+            return true;
+        }
+    }
+}
+using PrintPress.Data;
+using PrintPress.Data.Enum;
+using PrintPress.UIService.Abstract;
+
+namespace PrintPress.UICommand.ContentCommand
+{
+    internal class UpdateContentStatusCommand<T> : Command<T> where T : ContentService<T>
+    {
+        ContentState _state;
+        public UpdateContentStatusCommand(T contentService, int index) : base(contentService)
+        {
+            _state = (ContentState)index;
+        }
+        protected override bool TryExecute()
+        {
+            ContentData? contentData = Service.ActiveContent;
+            if (contentData == null)
+            {
+                return false;
+            }
+            contentData.State = _state;
+            return true;
+        }
+    }
+}
+using PrintPress.Data;
+using PrintPress.UIService.Abstract;
+
+namespace PrintPress.UICommand.ContentCommand
+{
+    internal class UpdateContentTextCommand<T> : Command<T> where T : ContentService<T>
+    {
+        private string _newText = string.Empty;
+        private string _oldText = string.Empty;
+        private ContentData? _content;
+        public UpdateContentTextCommand(T contentService, string newText) : base(contentService, true) 
+        {
+            _newText = newText;
+        }
+        protected override bool TryExecute()
+        {
+            _content = Service.ActiveContent;
+            if (_content == null) 
+            { 
+                return false; 
+            }
+            _oldText = _content.Text;
+            _content.Text = _newText;
+            return true;
+        }
+        protected override bool TryUndoExecute()
+        {
+            if (_content == null)
+            {
+                return false;
+            }
+            _content.Text = _oldText;
+            return true;
+        }
+    }
+}
+using PrintPress.Data;
+using PrintPress.UIService.Abstract;
+
+namespace PrintPress.UICommand.ContentCommand
+{
+    internal class UpdateNotesTextCommand<T> : Command<T> where T : ContentService<T>
+    {
+        private string _newText = string.Empty;
+        private string _oldText = string.Empty;
+        private ContentData? _content;
+        public UpdateNotesTextCommand(T contentService, string newText) : base(contentService, true)
+        {
+            _newText = newText;
+        }
+        protected override bool TryExecute()
+        {
+            _content = Service.ActiveContent;
+            if (_content == null) 
+            { 
+                return false; 
+            }
+            _oldText = _content.Notes;
+            _content.Notes = _newText;
+            return true;
+        }
+        protected override bool TryUndoExecute()
+        {
+            Service.ActiveContent.Notes = _oldText;
+            return true;
+        }
+    }
+}
+using PrintPress.Data;
+using PrintPress.UIService.Abstract;
+
+namespace PrintPress.UICommand.ContentCommand
+{
+    internal class UpdateTitleTextCommand<T> : Command<T> where T : ContentService<T>
+    {
+        private string _newText = string.Empty;
+        private string _oldText = string.Empty;
+        private ContentData? _content;
+        public UpdateTitleTextCommand(T contentService, string newText) : base(contentService, true)
+        {
+            _newText = newText;
+        }
+        protected override bool TryExecute()
+        {
+            _content = Service.ActiveContent;
+            if (_content == null)
+            {
+                return false;
+            }
+
+            _oldText = _content.Title;
+            _content.Title = _newText;
+            return true;
+        }
+        protected override bool TryUndoExecute()
+        {
+            if (_content == null)
+            {
+                return false;
+            }
+            _content.Title = _oldText;
+            return true;
+        }
+    }
+}
+using PrintPress.Controller;
+using PrintPress.UIService;
+
+namespace PrintPress.UICommand.ContentCommand.Journalism
+{
+    internal class AddStoryCommand : Command<JournalismService>
+    {
+
+        public AddStoryCommand(JournalismService service) : base(service, false) { }
+
+        protected override bool TryExecute()
+        {
+            CommercialDataController.Instance.AllocateStory(Service.ActiveEmployee.Id, out int autoId);
+            Service.LoadStoryList();
+            Service.ActiveID = autoId;
+            return true;
+        }
+        protected override bool TryUndoExecute()
+        {
+            return false;
+        }
+    }
+}
+using PrintPress.Controller;
+using PrintPress.UIService;
+
+namespace PrintPress.UICommand.ContentCommand.Journalism
+{
+    internal class SaveActiveStoryCommand : Command<JournalismService>
+    {
+        public SaveActiveStoryCommand(JournalismService service)  : base(service) { }
+
+        protected override bool TryExecute()
+        {
+            if (Service.ActiveContent == null) return false;
+            CommercialDataController.Instance.UpdateStory(Service.ActiveContent);
+            Service.ActiveContent.LocalChanges = false;
+            Service.LoadStoryList();
+            return true;
+        }
+
+    }
+}
+using PrintPress.Data;
+using PrintPress.UIService;
+using PrintPress.UIService.Abstract;
+
+namespace PrintPress.UICommand.ContentCommand
+{
+    internal class UpdateSourcesCommand : Command<JournalismService>
+    {
+        private string _newText = string.Empty;
+        private string _oldText = string.Empty;
+        private StoryData? _content;
+        public UpdateSourcesCommand(JournalismService contentService, string newText) : base(contentService, true) 
+        {
+            _newText = newText;
+        }
+        protected override bool TryExecute()
+        {
+            _content = Service.ActiveContent;
+            if (_content == null) 
+            { 
+                return false; 
+            }
+            _oldText = _content.Sources;
+            _content.Sources = _newText;
+            return true;
+        }
+        protected override bool TryUndoExecute()
+        {
+            if (_content == null)
+            {
+                return false;
+            }
+            _content.Sources = _oldText;
+            return true;
+        }
+    }
+}
+using PrintPress.Controller;
+using PrintPress.Controller.Enum;
+using PrintPress.Data;
+using PrintPress.Data.Enum;
+using PrintPress.UIService.Abstract;
+
+namespace PrintPress.UIService
+{
+    internal class JournalismService : ContentService<JournalismService>
+    {
+        // Properties
+
+        public override Department Type { get { return Department.Journalism; } }
+        public Dictionary<int, StoryData> ContentList { get; set; } = [];
+        public override Dictionary<int, StoryData> GetContentList { get { return ContentList; } }
+        public override StoryData? ActiveContent 
+        {
+            get 
+            {
+                if (ContentList.ContainsKey(ActiveID))
+                {
+                    return ContentList[ActiveID];
+                }
+                return null;
+            } 
+        }
+        public JournalismService(EmployeeData activeEmployee) : base(activeEmployee)
+        {
+            LoadStoryList();
+            if (ContentList.Count == 0)
+            {
+                return;
+            }
+
+            ActiveID = ContentList.ElementAt(0).Key;
+        }
+
+        // Public functions
+
+        // Helper functions
+
+        public void LoadStoryList()
+        {
+            StoryData[] stories;
+            string message;
+
+            CommandReturnState crs = CommercialDataController.Instance.GetStories(ActiveEmployee.Id, out stories, out message);
+            if (crs == CommandReturnState.FAILED)
+            {
+                TabStatusMessage = message;
+                return;
+            }
+
+            ContentList = SortContents(stories);
+
+            OnContentListChanged();
+        }
+    }
+}
+using PrintPress.Controller;
+using PrintPress.Controller.Enum;
+using PrintPress.Data;
+using PrintPress.Data.Enum;
+using PrintPress.UIService.Abstract;
+
+namespace PrintPress.UIService
+{
+    internal class MarketingService : ContentService<MarketingService>
+    {
+        // Properties
+
+        public override Department Type { get { return Department.Marketing; } }
+        public List<AdvertData> EmployeeAdverts { get; set; } = [];
+        public override Dictionary<int, StoryData> GetContentList { get; }
+        public override AdvertData ActiveContent { get { return EmployeeAdverts[ActiveID]; } }
+
+        // Constructors
+
+        public MarketingService(EmployeeData activeEmployee) : base(activeEmployee)
+        {
+            LoadAdvertList();
+        }
+
+        // Helper functions
+
+        private void LoadAdvertList()
+        {
+            CommandReturnState crs = CommercialDataController.Instance.GetAdverts(ActiveEmployee.Id, out AdvertData[] ads, out string message);
+            if (crs == CommandReturnState.FAILED)
+            {
+                TabStatusMessage = message;
+                return;
+            }
+
+            EmployeeAdverts = ads.ToList();
+            SortContentByDate(EmployeeAdverts);
+
+            OnContentListChanged();
+        }
+    }
+}
+using PrintPress.Controller.Data;
+using PrintPress.Data;
+using PrintPress.Data.Enum;
+using PrintPress.UICommand;
+
+namespace PrintPress.UIService.Abstract
+{
+    internal abstract class ClientService<T> where T : ClientService<T>
+    { 
+        public EmployeeData ActiveEmployee { get; init; }
+        public string Name 
+        {
+            get
+            {
+                if (DataTools.DepartmentString(Type, out var name))
+                {
+                    return name;
+                }
+                throw new Exception("Department does not have a valid name assigned");
+            }
+        }
+        public abstract Department Type { get; }
+        public Stack<Command<T>> ExecuteHistory { get; init; }
+        public Stack<Command<T>> UndoHistory { get; init; }
+
+        public ClientService(EmployeeData employee)
+        {
+            ActiveEmployee = employee;
+            ExecuteHistory = new Stack<Command<T>>();
+            UndoHistory = new Stack<Command<T>>();
+        }
+
+        public void Close()
+        {
+            ExecuteHistory.Clear();
+            UndoHistory.Clear();
+        }
+    }
+}
+using PrintPress.Data;
+using System;
+
+namespace PrintPress.UIService.Abstract
+{
+    /// <summary>
+    /// 
+    /// </summary>
+    /// <typeparam name="T"></typeparam>
+    internal abstract class ContentService<T> : ClientService<T> where T : ContentService<T>
+    {
+        // Properties
+
+        public abstract ContentData? ActiveContent { get; }
+        public abstract Dictionary<int, StoryData> GetContentList { get; }
+
+        private int _activeContentID = -1;
+
+        public int ActiveID
+        {
+            get
+            {
+                return _activeContentID;
+            }
+            set
+            {
+                BeforeActiveChanged();
+                _activeContentID = value;
+                OnActiveChanged();
+            }
+        }
+
+        private string _statusMessage = string.Empty;
+        public string TabStatusMessage
+        { 
+            get
+            {
+                return _statusMessage;
+            }
+            set
+            {
+                _statusMessage = value;
+                OnTabStatusMessageChanged();
+            }
+        }
+
+        // Constructors
+
+        public ContentService(EmployeeData employee) : base(employee) { }
+
+        // Event handling
+
+        public event EventHandler<EventArgs>? ContentListChanged;
+        protected virtual void OnContentListChanged()
+        {
+            ContentListChanged?.Invoke(this, new EventArgs());
+        }
+        public event EventHandler<EventArgs>? StatusMessageChanged;
+        private void OnTabStatusMessageChanged()
+        {
+            StatusMessageChanged?.Invoke(this, new EventArgs());
+        }
+
+        public event EventHandler<EventArgs>? ActiveChanging;
+        protected virtual void BeforeActiveChanged()
+        {
+            ActiveChanging?.Invoke(this, new EventArgs());
+        }
+        public event EventHandler<EventArgs>? ActiveChanged;
+        protected virtual void OnActiveChanged()
+        {
+            ActiveChanged?.Invoke(this, new EventArgs());
+        }
+
+        // Helper functions
+
+        protected Dictionary<int,C> SortContents<C>(C[] contents) where C : ContentData
+        {
+            List<C> sortedContents = SortContentByDate(contents.ToList());
+            Dictionary<int, C> idStoryPair = new();
+            foreach (C story in sortedContents)
+            {
+                idStoryPair.Add(story.ContentID, story);
+            }
+            return idStoryPair;
+        }
+
+        protected List<C> SortContentByDate<C>(List<C> contentList) where C : ContentData
+        {
+            contentList.Sort((x, y) => x.LastSaved.CompareTo(y.LastSaved));
+            return contentList;
+        }
+    }
+}
+using PrintPress.Controller;
+using PrintPress.Controller.Data;
+using PrintPress.Controller.Enum;
+using PrintPress.Data;
+using PrintPress.Data.Builder;
+using PrintPress.Data.Enum;
+using System.Diagnostics.Tracing;
+using System.Net.Mail;
+
+namespace PrintPress.UI
+{
+    internal partial class Admin : Form
+    {
+        public Admin()
+        {
+            InitializeComponent();
+        }
+        
+        private string[] AddressFields
+        {
+            get
+            {
+                return [
+                    houseNameNumText.Text,
+                    roadNameText.Text,
+                    cityText.Text,
+                    countyText.Text,
+                    countryText.Text,
+                    postcodeText.Text];
+            }
+        }
+        private string[] PersonalFields
+        {
+            get
+            {
+                return [
+                    firstNamesText.Text,
+                    lastNameText.Text,
+                    emailText.Text.ToLower(),
+                    phoneText.Text];
+            }
+        }
+
+        private string[] EmployeeFields
+        {
+            get
+            {
+                return [
+                    jobDescText.Text,
+                    passwordText.Text];
+            }
+        }
+
+        private void CreateCoTableButton_Click(object sender, EventArgs e)
+        {
+            //VerifyDatabase();
+        }
+
+        private void sendSqlButton_Click(object sender, EventArgs e)
+        {
+            CommandReturnState resultState = CommercialDataController.Instance.SendSql(sqlStringText.Text, out string result);
+            if (resultState == CommandReturnState.FOUND)
+            {
+                MessageBox.Show(result);
+            }
+            else if (resultState == CommandReturnState.NOTFOUND)
+            {
+                MessageBox.Show("Request not found");
+            }
+        }
+
+        private void sendClassifiedSqlButton_Click(object sender, EventArgs e)
+        {
+            if (ClassifiedDataController.Instance.SendSql(clasSqlStringText.Text, out string result) ==
+                Controller.Enum.CommandReturnState.FOUND) MessageBox.Show(result);
+        }
+
+        private void addEmployeeButton_Click(object sender, EventArgs e)
+        {
+            string[] adrsText = AddressFields;
+
+            bool oneAdrsFieldValid = false;
+            bool oneAdrsFieldInvalid = false;
+
+            foreach (string field in adrsText)
+            {
+                if (validStandardInput(field))
+                {
+                    oneAdrsFieldValid = true;
+                }
+                else
+                {
+                    oneAdrsFieldInvalid = true;
+                }
+            }
+
+            Address? address = null;
+            if (oneAdrsFieldValid && oneAdrsFieldInvalid)
+            {
+                MessageBox.Show("invalid address format - leave all fields blank for no address.");
+            }
+            else if (oneAdrsFieldValid) 
+            {
+                address = new Address(
+                adrsText[0],
+                adrsText[1],
+                adrsText[2],
+                adrsText[3],
+                adrsText[4],
+                adrsText[5]);
+            }
+
+            string[] psnlFields = PersonalFields;
+
+            if (!validStandardInput(psnlFields))
+            {
+                MessageBox.Show("invalid name / personal details");
+                return;
+            }
+
+            if (!MailAddress.TryCreate(psnlFields[2], out MailAddress email))
+            {
+                MessageBox.Show("invalid email format");
+                return;
+            }
+
+            PersonalData personalData = new PersonalData(
+                address,
+                psnlFields[0],
+                psnlFields[1],
+                email,
+                psnlFields[3]);
+
+            string[] employeeFields = EmployeeFields;
+            if (!validStandardInput(employeeFields)) 
+            {
+                MessageBox.Show("invalid job desc / password");
+                return;
+            }
+
+            string[] clearances = clearanceText.Text.Split(',');
+            List<Department> departmentList = new List<Department>();
+
+            foreach (string clearance in clearances)
+            {
+                if (DataTools.DepartmentString(clearance, out Department d))
+                {
+                    departmentList.Add(d);
+                }
+            }
+
+            EmployeeData employeeData = new EmployeeData(
+                -1,
+                personalData,
+                employeeFields[0],
+                departmentList.ToArray());
+
+            ClassifiedDataController.Instance.AddCredentials(employeeData, employeeFields[1]);
+        }
+        private bool validStandardInput(string input, int maxLength = 20)
+        {
+            return validStandardInput([input]);
+        }
+        private bool validStandardInput(string[] input, int maxLength = 20)
+        {
+            foreach (string s in input)
+            {
+                string str = s.Trim();
+                if (str.Length < 2 || str.Length > maxLength)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    }
+}
+namespace PrintPress.UI
+{
+    partial class Admin
+    {
+        /// <summary>
+        /// Required designer variable.
+        /// </summary>
+        private System.ComponentModel.IContainer components = null;
+
+        /// <summary>
+        /// Clean up any resources being used.
+        /// </summary>
+        /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && (components != null))
+            {
+                components.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        #region Windows Form Designer generated code
+
+        /// <summary>
+        /// Required method for Designer support - do not modify
+        /// the contents of this method with the code editor.
+        /// </summary>
+        private void InitializeComponent()
+        {
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(Admin));
+            classifiedPage = new TabPage();
+            sendClassifiedSqlButton = new Button();
+            clasSqlStringText = new TextBox();
+            button2 = new Button();
+            dataGridView1 = new DataGridView();
+            commercialData = new TabPage();
+            sendSqlButton = new Button();
+            sqlStringText = new TextBox();
+            CreateCoTableButton = new Button();
+            commercialDataGrid = new DataGridView();
+            adminTabControl = new TabControl();
+            EmployeeTab = new TabPage();
+            splitContainer1 = new SplitContainer();
+            addEmployeeButton = new Button();
+            label13 = new Label();
+            label10 = new Label();
+            clearanceText = new TextBox();
+            jobDescText = new TextBox();
+            label11 = new Label();
+            postcodeText = new TextBox();
+            Postcode = new Label();
+            countryText = new TextBox();
+            label9 = new Label();
+            countyText = new TextBox();
+            label5 = new Label();
+            cityText = new TextBox();
+            label6 = new Label();
+            phoneText = new TextBox();
+            label7 = new Label();
+            emailText = new TextBox();
+            label8 = new Label();
+            roadNameText = new TextBox();
+            label4 = new Label();
+            houseNameNumText = new TextBox();
+            label3 = new Label();
+            lastNameText = new TextBox();
+            label2 = new Label();
+            firstNamesText = new TextBox();
+            label1 = new Label();
+            passwordText = new TextBox();
+            label14 = new Label();
+            classifiedPage.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)dataGridView1).BeginInit();
+            commercialData.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)commercialDataGrid).BeginInit();
+            adminTabControl.SuspendLayout();
+            EmployeeTab.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
+            splitContainer1.Panel1.SuspendLayout();
+            splitContainer1.SuspendLayout();
+            SuspendLayout();
+            // 
+            // classifiedPage
+            // 
+            classifiedPage.Controls.Add(sendClassifiedSqlButton);
+            classifiedPage.Controls.Add(clasSqlStringText);
+            classifiedPage.Controls.Add(button2);
+            classifiedPage.Controls.Add(dataGridView1);
+            classifiedPage.Location = new Point(4, 29);
+            classifiedPage.Name = "classifiedPage";
+            classifiedPage.Padding = new Padding(3);
+            classifiedPage.Size = new Size(788, 436);
+            classifiedPage.TabIndex = 2;
+            classifiedPage.Text = "ClassifiedData";
+            classifiedPage.UseVisualStyleBackColor = true;
+            // 
+            // sendClassifiedSqlButton
+            // 
+            sendClassifiedSqlButton.Location = new Point(661, 41);
+            sendClassifiedSqlButton.Name = "sendClassifiedSqlButton";
+            sendClassifiedSqlButton.Size = new Size(115, 29);
+            sendClassifiedSqlButton.TabIndex = 11;
+            sendClassifiedSqlButton.Text = "Send SQL";
+            sendClassifiedSqlButton.UseVisualStyleBackColor = true;
+            sendClassifiedSqlButton.Click += sendClassifiedSqlButton_Click;
+            // 
+            // clasSqlStringText
+            // 
+            clasSqlStringText.Location = new Point(6, 42);
+            clasSqlStringText.Name = "clasSqlStringText";
+            clasSqlStringText.Size = new Size(649, 27);
+            clasSqlStringText.TabIndex = 10;
+            // 
+            // button2
+            // 
+            button2.Location = new Point(6, 7);
+            button2.Name = "button2";
+            button2.Size = new Size(127, 29);
+            button2.TabIndex = 9;
+            button2.Text = "Create Table";
+            button2.UseVisualStyleBackColor = true;
+            // 
+            // dataGridView1
+            // 
+            dataGridView1.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            dataGridView1.Location = new Point(6, 78);
+            dataGridView1.Name = "dataGridView1";
+            dataGridView1.RowHeadersWidth = 51;
+            dataGridView1.Size = new Size(776, 323);
+            dataGridView1.TabIndex = 8;
+            // 
+            // commercialData
+            // 
+            commercialData.Controls.Add(sendSqlButton);
+            commercialData.Controls.Add(sqlStringText);
+            commercialData.Controls.Add(CreateCoTableButton);
+            commercialData.Controls.Add(commercialDataGrid);
+            commercialData.Location = new Point(4, 29);
+            commercialData.Name = "commercialData";
+            commercialData.Padding = new Padding(3);
+            commercialData.Size = new Size(788, 436);
+            commercialData.TabIndex = 1;
+            commercialData.Text = "CommercialData";
+            commercialData.UseVisualStyleBackColor = true;
+            // 
+            // sendSqlButton
+            // 
+            sendSqlButton.Location = new Point(661, 43);
+            sendSqlButton.Name = "sendSqlButton";
+            sendSqlButton.Size = new Size(115, 29);
+            sendSqlButton.TabIndex = 7;
+            sendSqlButton.Text = "Send SQL";
+            sendSqlButton.UseVisualStyleBackColor = true;
+            sendSqlButton.Click += sendSqlButton_Click;
+            // 
+            // sqlStringText
+            // 
+            sqlStringText.Location = new Point(6, 44);
+            sqlStringText.Name = "sqlStringText";
+            sqlStringText.Size = new Size(649, 27);
+            sqlStringText.TabIndex = 6;
+            // 
+            // CreateCoTableButton
+            // 
+            CreateCoTableButton.Location = new Point(6, 9);
+            CreateCoTableButton.Name = "CreateCoTableButton";
+            CreateCoTableButton.Size = new Size(127, 29);
+            CreateCoTableButton.TabIndex = 1;
+            CreateCoTableButton.Text = "Create Table";
+            CreateCoTableButton.UseVisualStyleBackColor = true;
+            CreateCoTableButton.Click += CreateCoTableButton_Click;
+            // 
+            // commercialDataGrid
+            // 
+            commercialDataGrid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            commercialDataGrid.Location = new Point(6, 80);
+            commercialDataGrid.Name = "commercialDataGrid";
+            commercialDataGrid.RowHeadersWidth = 51;
+            commercialDataGrid.Size = new Size(776, 323);
+            commercialDataGrid.TabIndex = 0;
+            // 
+            // adminTabControl
+            // 
+            adminTabControl.Controls.Add(commercialData);
+            adminTabControl.Controls.Add(classifiedPage);
+            adminTabControl.Controls.Add(EmployeeTab);
+            adminTabControl.Dock = DockStyle.Fill;
+            adminTabControl.Location = new Point(0, 0);
+            adminTabControl.Name = "adminTabControl";
+            adminTabControl.SelectedIndex = 0;
+            adminTabControl.Size = new Size(800, 518);
+            adminTabControl.TabIndex = 0;
+            // 
+            // EmployeeTab
+            // 
+            EmployeeTab.Controls.Add(splitContainer1);
+            EmployeeTab.Location = new Point(4, 29);
+            EmployeeTab.Name = "EmployeeTab";
+            EmployeeTab.Padding = new Padding(3);
+            EmployeeTab.Size = new Size(792, 485);
+            EmployeeTab.TabIndex = 3;
+            EmployeeTab.Text = "Employee";
+            EmployeeTab.UseVisualStyleBackColor = true;
+            // 
+            // splitContainer1
+            // 
+            splitContainer1.Dock = DockStyle.Fill;
+            splitContainer1.Location = new Point(3, 3);
+            splitContainer1.Name = "splitContainer1";
+            // 
+            // splitContainer1.Panel1
+            // 
+            splitContainer1.Panel1.Controls.Add(label14);
+            splitContainer1.Panel1.Controls.Add(passwordText);
+            splitContainer1.Panel1.Controls.Add(addEmployeeButton);
+            splitContainer1.Panel1.Controls.Add(label13);
+            splitContainer1.Panel1.Controls.Add(label10);
+            splitContainer1.Panel1.Controls.Add(clearanceText);
+            splitContainer1.Panel1.Controls.Add(jobDescText);
+            splitContainer1.Panel1.Controls.Add(label11);
+            splitContainer1.Panel1.Controls.Add(postcodeText);
+            splitContainer1.Panel1.Controls.Add(Postcode);
+            splitContainer1.Panel1.Controls.Add(countryText);
+            splitContainer1.Panel1.Controls.Add(label9);
+            splitContainer1.Panel1.Controls.Add(countyText);
+            splitContainer1.Panel1.Controls.Add(label5);
+            splitContainer1.Panel1.Controls.Add(cityText);
+            splitContainer1.Panel1.Controls.Add(label6);
+            splitContainer1.Panel1.Controls.Add(phoneText);
+            splitContainer1.Panel1.Controls.Add(label7);
+            splitContainer1.Panel1.Controls.Add(emailText);
+            splitContainer1.Panel1.Controls.Add(label8);
+            splitContainer1.Panel1.Controls.Add(roadNameText);
+            splitContainer1.Panel1.Controls.Add(label4);
+            splitContainer1.Panel1.Controls.Add(houseNameNumText);
+            splitContainer1.Panel1.Controls.Add(label3);
+            splitContainer1.Panel1.Controls.Add(lastNameText);
+            splitContainer1.Panel1.Controls.Add(label2);
+            splitContainer1.Panel1.Controls.Add(firstNamesText);
+            splitContainer1.Panel1.Controls.Add(label1);
+            splitContainer1.Size = new Size(786, 479);
+            splitContainer1.SplitterDistance = 385;
+            splitContainer1.TabIndex = 2;
+            // 
+            // addEmployeeButton
+            // 
+            addEmployeeButton.Location = new Point(253, 439);
+            addEmployeeButton.Name = "addEmployeeButton";
+            addEmployeeButton.Size = new Size(125, 29);
+            addEmployeeButton.TabIndex = 27;
+            addEmployeeButton.Text = "Add employee";
+            addEmployeeButton.UseVisualStyleBackColor = true;
+            addEmployeeButton.Click += addEmployeeButton_Click;
+            // 
+            // label13
+            // 
+            label13.AutoSize = true;
+            label13.Location = new Point(3, 310);
+            label13.Name = "label13";
+            label13.Size = new Size(167, 20);
+            label13.TabIndex = 24;
+            label13.Text = "Clearance (',' separated)";
+            // 
+            // label10
+            // 
+            label10.AutoSize = true;
+            label10.Font = new Font("Segoe UI", 7.8F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            label10.Location = new Point(3, 330);
+            label10.Name = "label10";
+            label10.Size = new Size(346, 17);
+            label10.TabIndex = 26;
+            label10.Text = "Admin/Accounts/Editing/Journalism/Marketing/Processing";
+            // 
+            // clearanceText
+            // 
+            clearanceText.Location = new Point(3, 353);
+            clearanceText.Name = "clearanceText";
+            clearanceText.Size = new Size(375, 27);
+            clearanceText.TabIndex = 25;
+            // 
+            // jobDescText
+            // 
+            jobDescText.Location = new Point(3, 247);
+            jobDescText.Name = "jobDescText";
+            jobDescText.Size = new Size(177, 27);
+            jobDescText.TabIndex = 21;
+            // 
+            // label11
+            // 
+            label11.AutoSize = true;
+            label11.Location = new Point(3, 224);
+            label11.Name = "label11";
+            label11.Size = new Size(110, 20);
+            label11.TabIndex = 20;
+            label11.Text = "Job description";
+            // 
+            // postcodeText
+            // 
+            postcodeText.Location = new Point(201, 300);
+            postcodeText.Name = "postcodeText";
+            postcodeText.Size = new Size(177, 27);
+            postcodeText.TabIndex = 19;
+            // 
+            // Postcode
+            // 
+            Postcode.AutoSize = true;
+            Postcode.Location = new Point(201, 277);
+            Postcode.Name = "Postcode";
+            Postcode.Size = new Size(69, 20);
+            Postcode.TabIndex = 18;
+            Postcode.Text = "Postcode";
+            // 
+            // countryText
+            // 
+            countryText.Location = new Point(201, 247);
+            countryText.Name = "countryText";
+            countryText.Size = new Size(177, 27);
+            countryText.TabIndex = 17;
+            // 
+            // label9
+            // 
+            label9.AutoSize = true;
+            label9.Location = new Point(201, 224);
+            label9.Name = "label9";
+            label9.Size = new Size(60, 20);
+            label9.TabIndex = 16;
+            label9.Text = "Country";
+            // 
+            // countyText
+            // 
+            countyText.Location = new Point(201, 194);
+            countyText.Name = "countyText";
+            countyText.Size = new Size(177, 27);
+            countyText.TabIndex = 15;
+            // 
+            // label5
+            // 
+            label5.AutoSize = true;
+            label5.Location = new Point(201, 171);
+            label5.Name = "label5";
+            label5.Size = new Size(55, 20);
+            label5.TabIndex = 14;
+            label5.Text = "County";
+            // 
+            // cityText
+            // 
+            cityText.Location = new Point(201, 141);
+            cityText.Name = "cityText";
+            cityText.Size = new Size(177, 27);
+            cityText.TabIndex = 13;
+            // 
+            // label6
+            // 
+            label6.AutoSize = true;
+            label6.Location = new Point(201, 118);
+            label6.Name = "label6";
+            label6.Size = new Size(34, 20);
+            label6.TabIndex = 12;
+            label6.Text = "City";
+            // 
+            // phoneText
+            // 
+            phoneText.Location = new Point(3, 194);
+            phoneText.Name = "phoneText";
+            phoneText.Size = new Size(177, 27);
+            phoneText.TabIndex = 11;
+            // 
+            // label7
+            // 
+            label7.AutoSize = true;
+            label7.Location = new Point(3, 171);
+            label7.Name = "label7";
+            label7.Size = new Size(105, 20);
+            label7.TabIndex = 10;
+            label7.Text = "Phone number";
+            // 
+            // emailText
+            // 
+            emailText.Location = new Point(3, 141);
+            emailText.Name = "emailText";
+            emailText.Size = new Size(177, 27);
+            emailText.TabIndex = 9;
+            // 
+            // label8
+            // 
+            label8.AutoSize = true;
+            label8.Location = new Point(3, 118);
+            label8.Name = "label8";
+            label8.Size = new Size(46, 20);
+            label8.TabIndex = 8;
+            label8.Text = "Email";
+            // 
+            // roadNameText
+            // 
+            roadNameText.Location = new Point(201, 88);
+            roadNameText.Name = "roadNameText";
+            roadNameText.Size = new Size(177, 27);
+            roadNameText.TabIndex = 7;
+            // 
+            // label4
+            // 
+            label4.AutoSize = true;
+            label4.Location = new Point(201, 65);
+            label4.Name = "label4";
+            label4.Size = new Size(85, 20);
+            label4.TabIndex = 6;
+            label4.Text = "Road name";
+            // 
+            // houseNameNumText
+            // 
+            houseNameNumText.Location = new Point(201, 35);
+            houseNameNumText.Name = "houseNameNumText";
+            houseNameNumText.Size = new Size(177, 27);
+            houseNameNumText.TabIndex = 5;
+            // 
+            // label3
+            // 
+            label3.AutoSize = true;
+            label3.Location = new Point(201, 12);
+            label3.Name = "label3";
+            label3.Size = new Size(149, 20);
+            label3.TabIndex = 4;
+            label3.Text = "House name/number";
+            // 
+            // lastNameText
+            // 
+            lastNameText.Location = new Point(3, 88);
+            lastNameText.Name = "lastNameText";
+            lastNameText.Size = new Size(177, 27);
+            lastNameText.TabIndex = 3;
+            // 
+            // label2
+            // 
+            label2.AutoSize = true;
+            label2.Location = new Point(3, 65);
+            label2.Name = "label2";
+            label2.Size = new Size(76, 20);
+            label2.TabIndex = 2;
+            label2.Text = "Last name";
+            // 
+            // firstNamesText
+            // 
+            firstNamesText.Location = new Point(3, 35);
+            firstNamesText.Name = "firstNamesText";
+            firstNamesText.Size = new Size(177, 27);
+            firstNamesText.TabIndex = 1;
+            // 
+            // label1
+            // 
+            label1.AutoSize = true;
+            label1.Location = new Point(3, 12);
+            label1.Name = "label1";
+            label1.Size = new Size(83, 20);
+            label1.TabIndex = 0;
+            label1.Text = "First names";
+            // 
+            // passwordText
+            // 
+            passwordText.Location = new Point(5, 406);
+            passwordText.Name = "passwordText";
+            passwordText.Size = new Size(375, 27);
+            passwordText.TabIndex = 28;
+            // 
+            // label14
+            // 
+            label14.AutoSize = true;
+            label14.Location = new Point(5, 383);
+            label14.Name = "label14";
+            label14.Size = new Size(70, 20);
+            label14.TabIndex = 29;
+            label14.Text = "Password";
+            // 
+            // Admin
+            // 
+            AutoScaleDimensions = new SizeF(8F, 20F);
+            AutoScaleMode = AutoScaleMode.Font;
+            ClientSize = new Size(800, 518);
+            Controls.Add(adminTabControl);
+            Icon = (Icon)resources.GetObject("$this.Icon");
+            Name = "Admin";
+            Text = "Admin - PrintPress";
+            classifiedPage.ResumeLayout(false);
+            classifiedPage.PerformLayout();
+            ((System.ComponentModel.ISupportInitialize)dataGridView1).EndInit();
+            commercialData.ResumeLayout(false);
+            commercialData.PerformLayout();
+            ((System.ComponentModel.ISupportInitialize)commercialDataGrid).EndInit();
+            adminTabControl.ResumeLayout(false);
+            EmployeeTab.ResumeLayout(false);
+            splitContainer1.Panel1.ResumeLayout(false);
+            splitContainer1.Panel1.PerformLayout();
+            ((System.ComponentModel.ISupportInitialize)splitContainer1).EndInit();
+            splitContainer1.ResumeLayout(false);
+            ResumeLayout(false);
+        }
+
+        #endregion
+
+        private TabPage classifiedPage;
+        private TabPage commercialData;
+        private DataGridView commercialDataGrid;
+        private TabControl adminTabControl;
+        private Button CreateCoTableButton;
+        private Button sendSqlButton;
+        private TextBox sqlStringText;
+        private Button sendClassifiedSqlButton;
+        private TextBox clasSqlStringText;
+        private Button button2;
+        private DataGridView dataGridView1;
+        private TabPage EmployeeTab;
+        private Label label1;
+        private TextBox firstNamesText;
+        private SplitContainer splitContainer1;
+        private TextBox lastNameText;
+        private Label label2;
+        private TextBox houseNameNumText;
+        private Label label3;
+        private TextBox postcodeText;
+        private TextBox jobDescText;
+        private Label label11;
+        private Label Postcode;
+        private TextBox countryText;
+        private Label label9;
+        private TextBox countyText;
+        private Label label5;
+        private TextBox cityText;
+        private Label label6;
+        private TextBox phoneText;
+        private Label label7;
+        private TextBox emailText;
+        private Label label8;
+        private TextBox roadNameText;
+        private Label label4;
+        private TextBox clearanceText;
+        private Label label13;
+        private Label label10;
+        private Button addEmployeeButton;
+        private Label label14;
+        private TextBox passwordText;
+    }
+}
+using PrintPress.Data;
+using PrintPress.Data.Enum;
+using PrintPress.UICommand.ContentCommand;
+using PrintPress.UICommand.ContentCommand.Journalism;
+using PrintPress.UIService;
+
+namespace PrintPress.UI
+{
+#if DEBUG
+    internal partial class Journalism : PrintPress.UI.Tools.DummyContent
+#else
+    internal partial class Journalism : PrintPress.UI.ContentWindow
+#endif
+    {
+        public JournalismService Service { get; init; }
+        public override Department Type { get { return Service.Type; } }
+        public Journalism(JournalismService journalismService) : base()
+        {
+            Service = journalismService;
+
+            Service.ActiveChanging += ContentUpdating;
+            Service.ActiveChanged += ContentUpdated;
+            Service.ContentListChanged += OnContentsListChanged;
+
+            InitializeComponent();
+
+            ContentUpdated(null, new EventArgs());
+            UpdateDisplay();
+        }
+
+        private void OnContentsListChanged(object? sender, EventArgs e)
+        {
+            UpdateContentListDisplay(Service.ContentList.Values.ToList());
+        }
+
+        private void createButton_Click(object sender, EventArgs e)
+        {
+            if (UpdatingDisplay) return;
+            AddStoryCommand command = new(Service);
+            command.Execute();
+        }
+
+        private void saveButton_Click(object sender, EventArgs e)
+        {
+            if (UpdatingDisplay) return;
+            SaveActiveStoryCommand command = new(Service);
+            command.Execute();
+        }
+
+        protected override void titleText_TextChanged(object sender, EventArgs e)
+        {
+            if (UpdatingDisplay) return;
+            UpdateTitleTextCommand<JournalismService> command = new(Service, titleText.Text);
+            command.Execute();
+        }
+
+        protected override void contentText_TextChanged(object sender, EventArgs e)
+        {
+            if (UpdatingDisplay) return;
+            UpdateContentTextCommand<JournalismService> command = new(Service, contentText.Text);
+            command.Execute();
+        }
+
+        protected override void notesText_TextChanged(object sender, EventArgs e)
+        {
+            if (UpdatingDisplay) return;
+            UpdateNotesTextCommand<JournalismService> command = new(Service, notesText.Text);
+            command.Execute();
+        }
+        protected override void contentStatusComboBox_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (UpdatingDisplay) return;
+            UpdateContentStatusCommand<JournalismService> command = new(Service, contentStatusComboBox.SelectedIndex);
+            command.Execute();
+        }
+
+        protected override void contentListView_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (UpdatingDisplay) return;
+            UpdateActiveContentCommand<JournalismService> command = new(Service, contentListView.SelectedItems);
+            command.Execute();
+        }
+
+        private void sourcesText_TextChanged(object sender, EventArgs e)
+        {
+            if (UpdatingDisplay) return;
+            UpdateSourcesCommand command = new(Service, sourcesText.Text);
+            command.Execute();
+        }
+
+        protected void OnSaveStateChanged(object? sender, EventArgs e)
+        {
+            if (Service.ActiveContent == null) return;
+            SetSavedStateLabel(Service.ActiveContent.LocalChanges);
+        }
+
+        protected void UpdateContentDisplay(StoryData? content)
+        {
+            if (content == null)
+            {
+                return;
+            }
+            base.UpdateContentDisplay(content);
+            
+            UpdatingDisplay = true;
+            sourcesText.Text = content.Sources;
+            UpdatingDisplay = false;
+        }
+
+        private void ContentUpdating(object? sender, EventArgs e)
+        {
+            // Unset OnActiveDataChanged event.
+            if (Service.ActiveContent == null) return;
+            Service.ActiveContent.SaveStateChanged -= OnSaveStateChanged;
+        }
+
+        private void ContentUpdated(object? sender, EventArgs e)
+        {
+            // Update display
+            UpdateContentDisplay(Service.ActiveContent);
+            if (Service.ActiveContent == null) return;
+            SetSavedStateLabel(Service.ActiveContent.LocalChanges);
+
+            // Set OnActiveDataChanged event.
+            Service.ActiveContent.SaveStateChanged += OnSaveStateChanged;
+        }
+
+        private void UpdateDisplay()
+        {
+            UpdateContentListDisplay(Service.ContentList.Values.ToList());
+            UpdateContentDisplay(Service.ActiveContent);
+        }
+    }
+}
+namespace PrintPress.UI
+{
+    partial class Journalism
+    {
+        /// <summary>
+        /// Required designer variable.
+        /// </summary>
+        private System.ComponentModel.IContainer components = null;
+
+        /// <summary>
+        /// Clean up any resources being used.
+        /// </summary>
+        /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && (components != null))
+            {
+                components.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        #region Windows Form Designer generated code
+
+        /// <summary>
+        /// Required method for Designer support - do not modify
+        /// the contents of this method with the code editor.
+        /// </summary>
+        private void InitializeComponent()
+        {
+            sourcesText = new TextBox();
+            label9 = new Label();
+            ((System.ComponentModel.ISupportInitialize)pictureBox1).BeginInit();
+            SuspendLayout();
+            // 
+            // createButton
+            // 
+            createButton.Click += createButton_Click;
+            // 
+            // saveButton
+            // 
+            saveButton.Click += saveButton_Click;
+            // 
+            // sourcesText
+            // 
+            sourcesText.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            sourcesText.Location = new Point(983, 605);
+            sourcesText.Multiline = true;
+            sourcesText.Name = "sourcesText";
+            sourcesText.ScrollBars = ScrollBars.Vertical;
+            sourcesText.Size = new Size(422, 227);
+            sourcesText.TabIndex = 26;
+            sourcesText.TextChanged += sourcesText_TextChanged;
+            // 
+            // label9
+            // 
+            label9.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            label9.AutoSize = true;
+            label9.Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            label9.Location = new Point(980, 582);
+            label9.Name = "label9";
+            label9.Size = new Size(63, 20);
+            label9.TabIndex = 29;
+            label9.Text = "Sources";
+            // 
+            // Journalism
+            // 
+            AutoScaleDimensions = new SizeF(8F, 20F);
+            AutoScaleMode = AutoScaleMode.Font;
+            ClientSize = new Size(1418, 879);
+            Controls.Add(label9);
+            Controls.Add(sourcesText);
+            Name = "Journalism";
+            Text = "Journalism - PrintPress";
+            Controls.SetChildIndex(contentStatusComboBox, 0);
+            Controls.SetChildIndex(label4, 0);
+            Controls.SetChildIndex(contentText, 0);
+            Controls.SetChildIndex(contentListView, 0);
+            Controls.SetChildIndex(label1, 0);
+            Controls.SetChildIndex(label2, 0);
+            Controls.SetChildIndex(titleText, 0);
+            Controls.SetChildIndex(label3, 0);
+            Controls.SetChildIndex(submitButton, 0);
+            Controls.SetChildIndex(createButton, 0);
+            Controls.SetChildIndex(deleteButton, 0);
+            Controls.SetChildIndex(pictureBox1, 0);
+            Controls.SetChildIndex(saveButton, 0);
+            Controls.SetChildIndex(notesText, 0);
+            Controls.SetChildIndex(label6, 0);
+            Controls.SetChildIndex(label8, 0);
+            Controls.SetChildIndex(label7, 0);
+            Controls.SetChildIndex(uploadImageButton, 0);
+            Controls.SetChildIndex(removeImageButton, 0);
+            Controls.SetChildIndex(saveStateTitleLabel, 0);
+            Controls.SetChildIndex(saveStateLabel, 0);
+            Controls.SetChildIndex(commentsText, 0);
+            Controls.SetChildIndex(label5, 0);
+            Controls.SetChildIndex(sourcesText, 0);
+            Controls.SetChildIndex(label9, 0);
+            ((System.ComponentModel.ISupportInitialize)pictureBox1).EndInit();
+            ResumeLayout(false);
+            PerformLayout();
+        }
+
+        #endregion
+
+        private TextBox sourcesText;
+        private Label label9;
+    }
+}
+using PrintPress.Controller;
+using PrintPress.Controller.Data;
+using PrintPress.Data;
+using PrintPress.Data.Enum;
+using PrintPress.UI;
+using PrintPress.UI.Enum;
+using PrintPress.UIService;
+using System.Net.Mail;
+
+namespace PrintPress
+{
+    internal partial class Launcher : Form
+    {  
+        private EmployeeData? activeUser;
+        private bool adminOverride = false;
+
+        private List<ClientWindow> activeClients = new List<ClientWindow>();
+
+        public Launcher()
+        {
+            InitializeComponent();
+            KeyPreview = true;
+            KeyDown += keyDownEvent;
+        }
+
+        //// Event handelling
+
+        private void LogInButton_Click(object sender, EventArgs e)
+        {
+            logInButton.Enabled = false;
+
+            if (activeUser == null)
+            {
+                ProcessLogIn();
+            }
+            else
+            {
+                ProcessLogOut();
+            }
+
+            logInButton.Enabled = true;
+        }
+
+        private void LaunchButton_Click(object sender, EventArgs e)
+        {
+            LaunchClient();
+        }
+
+        private void adminLabel_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
+        {
+            if ((activeUser == null || !activeUser.HasClearance(Department.Admin)) && adminOverride == false)
+            {
+                MessageBox.Show("Present valid admin credentials.");
+                return;
+            }
+            Admin adminForm = new Admin();
+            adminForm.ShowDialog();
+        }
+
+        private void keyDownEvent(object? sender, KeyEventArgs keyEventArgs)
+        {
+            if (keyEventArgs.KeyValue == 67) // c key
+            {
+                adminOverride = !adminOverride;
+            }
+        }
+
+        //// 
+
+        private void OnClientClosing(object? sender, FormClosingEventArgs fcArgs)
+        {
+            if (sender == null)
+            {
+                RemoveNullForms();
+                return;
+            }
+
+            ClientWindow clientWindow = (ClientWindow)sender;
+            clientWindow.FormClosing -= OnClientClosing;
+
+            if (activeClients.Contains(clientWindow))
+            {
+                activeClients.Remove(clientWindow);
+            }
+        }
+
+        //// Helper functions
+
+        private void LaunchClient()
+        {
+            if (!DataTools.DepartmentString(clientComboBox.Text, out Department department) ||
+                activeUser == null || !activeUser.HasClearance(department))
+            {
+                MessageBox.Show("Inavlid department selection");
+                return;
+            }
+
+            if (IsClientOpen(department))
+            {
+                MessageBox.Show("Client window is already open.");
+                return;
+            }
+
+            ClientWindow window;
+
+            switch (department)
+            {
+                case Department.Journalism:
+                    JournalismService js = new JournalismService(activeUser);
+                    window = new Journalism(js);
+                    break;
+                case Department.Marketing:
+                    MarketingService ms = new MarketingService(activeUser);
+                    window = new Marketing(ms);
+                    break;
+                default:
+                    return;
+            }
+
+            activeClients.Add(window);
+            window.FormClosing += OnClientClosing;
+            window.Show();
+        }
+
+        private void RemoveNullForms()
+        {
+            for (int i = 0; i < activeClients.Count; i++)
+            {
+                if (activeClients[i] == null)
+                {
+                    activeClients.RemoveAt(i--);
+                }
+            }
+        }
+
+        private bool IsClientOpen(Department department)
+        {
+            ClientWindow[] typeClients = activeClients.Where(x => x.Type == department).ToArray();
+            if (typeClients.Length > 0)
+            {
+                return true;
+            }
+            return false;
+        }
+
+        private void ProcessLogIn()
+        {
+            bool validFormat = true;
+            string statusMessage = string.Empty;
+
+            MailAddress mailAddress;
+            string password = passwordText.Text;
+
+            if (!ValidEmailFormat(emailText.Text, out mailAddress))
+            {
+                validFormat = false;
+                statusMessage = "invalid email";
+            }
+            else if (!ValidPasswordFormat(password))
+            {
+                validFormat = false;
+                statusMessage = "invalid password";
+            }
+
+            if (!validFormat)
+            {
+                UpdateStatusLabel(loginStatusLabel, statusMessage, StatusLabelColour.Red);
+                return;
+            }
+
+            ClassifiedDataController classifiedDC = ClassifiedDataController.Instance;
+            bool valid = classifiedDC.ValidateCredentials(mailAddress, password, out string message, out EmployeeData employee);
+
+            if (!valid)
+            {
+                UpdateStatusLabel(loginStatusLabel, message, StatusLabelColour.Red);
+                return;
+            }
+
+            activeUser = employee;
+
+            UpdateStatusLabel(loginStatusLabel, "Logged in as " + mailAddress.User, StatusLabelColour.Green);
+            UpdateStatusLabel(clientStatusLabel, "select client", StatusLabelColour.Grey);
+            emailText.Enabled = false;
+            passwordText.Enabled = false;
+            logInButton.Text = "Log Out";
+            PopulateClientCombobox();
+        }
+
+        private void ProcessLogOut()
+        {
+            activeUser = null;
+
+            UpdateStatusLabel(loginStatusLabel, "enter credentials", StatusLabelColour.Grey);
+            UpdateStatusLabel(clientStatusLabel, "log in to launch client", StatusLabelColour.Grey);
+            emailText.Enabled = true;
+            passwordText.Enabled = true;
+            logInButton.Text = "Log In";
+            passwordText.Text = string.Empty;
+            clientComboBox.Items.Clear();
+            launchButton.Enabled = false;
+        }
+
+        private void UpdateStatusLabel(Label label, string message, StatusLabelColour colour)
+        {
+            label.Text = message;
+            switch (colour)
+            {
+                default:
+                case StatusLabelColour.Grey:
+                    label.ForeColor = SystemColors.ControlDarkDark; break;
+                case StatusLabelColour.Red:
+                    label.ForeColor = Color.Firebrick; break;
+                case StatusLabelColour.Green:
+                    label.ForeColor = Color.Green; break;
+            }
+        }
+
+        private void PopulateClientCombobox()
+        {
+            clientComboBox.Items.Clear();
+            if (activeUser == null) return;
+
+            foreach (Department department in activeUser.clearance)
+            {
+                if (department != Department.Admin &&
+                    DataTools.DepartmentString(department, out string deptStr))
+                {
+                    clientComboBox.Items.Add(deptStr);
+                }
+            }
+
+            if (clientComboBox.Items.Count > 0)
+            {
+                clientComboBox.SelectedIndex = 0;
+                launchButton.Enabled = true;
+            }
+        }
+
+        private bool ValidEmailFormat(string email, out MailAddress mailAddress)
+        {
+            return MailAddress.TryCreate(email, out mailAddress);
+        }
+
+        private bool ValidPasswordFormat(string passsword)
+        {
+            if (string.IsNullOrEmpty(passsword) ||
+                passsword.Length < 3)
+            {
+                return false;
+            }
+            return true;
+        }
+    }
+}
+namespace PrintPress
+{
+    partial class Launcher
+    {
+        /// <summary>
+        ///  Required designer variable.
+        /// </summary>
+        private System.ComponentModel.IContainer components = null;
+
+        /// <summary>
+        ///  Clean up any resources being used.
+        /// </summary>
+        /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && (components != null))
+            {
+                components.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        #region Windows Form Designer generated code
+
+        /// <summary>
+        ///  Required method for Designer support - do not modify
+        ///  the contents of this method with the code editor.
+        /// </summary>
+        private void InitializeComponent()
+        {
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(Launcher));
+            clientComboBox = new ComboBox();
+            label1 = new Label();
+            launchButton = new Button();
+            clientStatusLabel = new Label();
+            pictureBox1 = new PictureBox();
+            emailText = new TextBox();
+            passwordText = new TextBox();
+            label2 = new Label();
+            label3 = new Label();
+            logInButton = new Button();
+            loginStatusLabel = new Label();
+            adminLabel = new LinkLabel();
+            ((System.ComponentModel.ISupportInitialize)pictureBox1).BeginInit();
+            SuspendLayout();
+            // 
+            // clientComboBox
+            // 
+            clientComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
+            clientComboBox.FormattingEnabled = true;
+            clientComboBox.Location = new Point(12, 225);
+            clientComboBox.Name = "clientComboBox";
+            clientComboBox.Size = new Size(170, 28);
+            clientComboBox.TabIndex = 0;
+            // 
+            // label1
+            // 
+            label1.AutoSize = true;
+            label1.Location = new Point(12, 202);
+            label1.Name = "label1";
+            label1.Size = new Size(47, 20);
+            label1.TabIndex = 1;
+            label1.Text = "Client";
+            // 
+            // launchButton
+            // 
+            launchButton.Enabled = false;
+            launchButton.Location = new Point(199, 224);
+            launchButton.Name = "launchButton";
+            launchButton.Size = new Size(73, 28);
+            launchButton.TabIndex = 2;
+            launchButton.Text = "Launch";
+            launchButton.UseVisualStyleBackColor = true;
+            launchButton.Click += LaunchButton_Click;
+            // 
+            // clientStatusLabel
+            // 
+            clientStatusLabel.AutoSize = true;
+            clientStatusLabel.ForeColor = SystemColors.ControlDarkDark;
+            clientStatusLabel.Location = new Point(12, 256);
+            clientStatusLabel.Name = "clientStatusLabel";
+            clientStatusLabel.Size = new Size(152, 20);
+            clientStatusLabel.TabIndex = 3;
+            clientStatusLabel.Text = "log in to launch client";
+            // 
+            // pictureBox1
+            // 
+            pictureBox1.Image = (Image)resources.GetObject("pictureBox1.Image");
+            pictureBox1.Location = new Point(287, 67);
+            pictureBox1.Name = "pictureBox1";
+            pictureBox1.Size = new Size(216, 201);
+            pictureBox1.SizeMode = PictureBoxSizeMode.StretchImage;
+            pictureBox1.TabIndex = 4;
+            pictureBox1.TabStop = false;
+            // 
+            // emailText
+            // 
+            emailText.Location = new Point(12, 32);
+            emailText.Name = "emailText";
+            emailText.Size = new Size(331, 27);
+            emailText.TabIndex = 5;
+            // 
+            // passwordText
+            // 
+            passwordText.Location = new Point(12, 85);
+            passwordText.Name = "passwordText";
+            passwordText.PasswordChar = '*';
+            passwordText.Size = new Size(331, 27);
+            passwordText.TabIndex = 6;
+            // 
+            // label2
+            // 
+            label2.AutoSize = true;
+            label2.Location = new Point(12, 62);
+            label2.Name = "label2";
+            label2.Size = new Size(70, 20);
+            label2.TabIndex = 7;
+            label2.Text = "Password";
+            // 
+            // label3
+            // 
+            label3.AutoSize = true;
+            label3.Location = new Point(12, 9);
+            label3.Name = "label3";
+            label3.Size = new Size(46, 20);
+            label3.TabIndex = 8;
+            label3.Text = "Email";
+            // 
+            // logInButton
+            // 
+            logInButton.Location = new Point(12, 148);
+            logInButton.Name = "logInButton";
+            logInButton.Size = new Size(73, 28);
+            logInButton.TabIndex = 9;
+            logInButton.Text = "Log In";
+            logInButton.UseVisualStyleBackColor = true;
+            logInButton.Click += LogInButton_Click;
+            // 
+            // loginStatusLabel
+            // 
+            loginStatusLabel.AutoSize = true;
+            loginStatusLabel.ForeColor = SystemColors.ControlDarkDark;
+            loginStatusLabel.Location = new Point(12, 115);
+            loginStatusLabel.Name = "loginStatusLabel";
+            loginStatusLabel.Size = new Size(119, 20);
+            loginStatusLabel.TabIndex = 10;
+            loginStatusLabel.Text = "enter credentials";
+            // 
+            // adminLabel
+            // 
+            adminLabel.AutoSize = true;
+            adminLabel.Location = new Point(450, 35);
+            adminLabel.Name = "adminLabel";
+            adminLabel.Size = new Size(51, 20);
+            adminLabel.TabIndex = 11;
+            adminLabel.TabStop = true;
+            adminLabel.Text = "admin";
+            adminLabel.LinkClicked += adminLabel_LinkClicked;
+            // 
+            // Launcher
+            // 
+            AutoScaleDimensions = new SizeF(8F, 20F);
+            AutoScaleMode = AutoScaleMode.Font;
+            ClientSize = new Size(513, 285);
+            Controls.Add(adminLabel);
+            Controls.Add(loginStatusLabel);
+            Controls.Add(logInButton);
+            Controls.Add(label3);
+            Controls.Add(label2);
+            Controls.Add(passwordText);
+            Controls.Add(emailText);
+            Controls.Add(pictureBox1);
+            Controls.Add(clientStatusLabel);
+            Controls.Add(launchButton);
+            Controls.Add(label1);
+            Controls.Add(clientComboBox);
+            FormBorderStyle = FormBorderStyle.Fixed3D;
+            Icon = (Icon)resources.GetObject("$this.Icon");
+            Name = "Launcher";
+            Text = "Launcher - PrintPress";
+            ((System.ComponentModel.ISupportInitialize)pictureBox1).EndInit();
+            ResumeLayout(false);
+            PerformLayout();
+        }
+
+        #endregion
+
+        private ComboBox clientComboBox;
+        private Label label1;
+        private Button launchButton;
+        private Label clientStatusLabel;
+        private PictureBox pictureBox1;
+        private TextBox emailText;
+        private TextBox passwordText;
+        private Label label2;
+        private Label label3;
+        private Button logInButton;
+        private Label loginStatusLabel;
+        private LinkLabel adminLabel;
+    }
+}
+using PrintPress.Data.Enum;
+using PrintPress.UIService;
+using PrintPress.UIWindow.Interface;
+
+namespace PrintPress.UI
+{
+#if DEBUG
+    internal partial class Marketing : PrintPress.UI.Tools.DummyContent//, IConcreteClientWindow<MarketingService>
+#else
+    internal partial class Marketing : PrintPress.UI.ContentWindow
+#endif
+    {
+        public MarketingService Service { get; init; }
+        public Department Type { get; init; }
+        public Marketing(MarketingService marketingService) : base()
+        {
+            Service = marketingService;
+            Type = Department.Marketing;
+            InitializeComponent();
+        }
+    }
+}
+namespace PrintPress.UI
+{
+    partial class Marketing
+    {
+        /// <summary>
+        /// Required designer variable.
+        /// </summary>
+        private System.ComponentModel.IContainer components = null;
+
+        /// <summary>
+        /// Clean up any resources being used.
+        /// </summary>
+        /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && (components != null))
+            {
+                components.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        #region Windows Form Designer generated code
+
+        /// <summary>
+        /// Required method for Designer support - do not modify
+        /// the contents of this method with the code editor.
+        /// </summary>
+        private void InitializeComponent()
+        {
+            label4 = new Label();
+            textBox2 = new TextBox();
+            label5 = new Label();
+            label9 = new Label();
+            textBox3 = new TextBox();
+            label10 = new Label();
+            textBox4 = new TextBox();
+            label11 = new Label();
+            textBox5 = new TextBox();
+            SuspendLayout();
+            // 
+            // label4
+            // 
+            label4.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            label4.AutoSize = true;
+            label4.Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            label4.Location = new Point(983, 582);
+            label4.Name = "label4";
+            label4.Size = new Size(113, 20);
+            label4.TabIndex = 24;
+            label4.Text = "Contact details";
+            // 
+            // textBox2
+            // 
+            textBox2.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            textBox2.Location = new Point(1013, 631);
+            textBox2.Name = "textBox2";
+            textBox2.Size = new Size(328, 27);
+            textBox2.TabIndex = 25;
+            // 
+            // label5
+            // 
+            label5.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            label5.AutoSize = true;
+            label5.Location = new Point(1013, 608);
+            label5.Name = "label5";
+            label5.Size = new Size(83, 20);
+            label5.TabIndex = 26;
+            label5.Text = "First names";
+            // 
+            // label9
+            // 
+            label9.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            label9.AutoSize = true;
+            label9.Location = new Point(1013, 661);
+            label9.Name = "label9";
+            label9.Size = new Size(76, 20);
+            label9.TabIndex = 28;
+            label9.Text = "Last name";
+            // 
+            // textBox3
+            // 
+            textBox3.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            textBox3.Location = new Point(1013, 684);
+            textBox3.Name = "textBox3";
+            textBox3.Size = new Size(226, 27);
+            textBox3.TabIndex = 27;
+            // 
+            // label10
+            // 
+            label10.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            label10.AutoSize = true;
+            label10.Location = new Point(1013, 714);
+            label10.Name = "label10";
+            label10.Size = new Size(46, 20);
+            label10.TabIndex = 30;
+            label10.Text = "Email";
+            // 
+            // textBox4
+            // 
+            textBox4.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            textBox4.Location = new Point(1013, 737);
+            textBox4.Name = "textBox4";
+            textBox4.Size = new Size(328, 27);
+            textBox4.TabIndex = 29;
+            // 
+            // label11
+            // 
+            label11.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            label11.AutoSize = true;
+            label11.Location = new Point(1013, 767);
+            label11.Name = "label11";
+            label11.Size = new Size(50, 20);
+            label11.TabIndex = 32;
+            label11.Text = "Phone";
+            // 
+            // textBox5
+            // 
+            textBox5.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            textBox5.Location = new Point(1013, 790);
+            textBox5.Name = "textBox5";
+            textBox5.Size = new Size(226, 27);
+            textBox5.TabIndex = 31;
+            // 
+            // Marketing
+            // 
+            AutoScaleDimensions = new SizeF(8F, 20F);
+            AutoScaleMode = AutoScaleMode.Font;
+            ClientSize = new Size(1418, 879);
+            Controls.Add(label11);
+            Controls.Add(textBox5);
+            Controls.Add(label10);
+            Controls.Add(textBox4);
+            Controls.Add(label9);
+            Controls.Add(textBox3);
+            Controls.Add(label5);
+            Controls.Add(textBox2);
+            Controls.Add(label4);
+            Name = "Marketing";
+            Text = "Marketing - PrintPress";
+            Controls.SetChildIndex(label4, 0);
+            Controls.SetChildIndex(textBox2, 0);
+            Controls.SetChildIndex(label5, 0);
+            Controls.SetChildIndex(textBox3, 0);
+            Controls.SetChildIndex(label9, 0);
+            Controls.SetChildIndex(textBox4, 0);
+            Controls.SetChildIndex(label10, 0);
+            Controls.SetChildIndex(textBox5, 0);
+            Controls.SetChildIndex(label11, 0);
+            ResumeLayout(false);
+            PerformLayout();
+        }
+
+        #endregion
+
+        private Label label4;
+        private TextBox textBox2;
+        private Label label5;
+        private Label label9;
+        private TextBox textBox3;
+        private Label label10;
+        private TextBox textBox4;
+        private Label label11;
+        private TextBox textBox5;
+    }
+}
+using PrintPress.Data.Enum;
+using System.ComponentModel;
+
+namespace PrintPress.UI
+{
+    internal abstract partial class ClientWindow : Form
+    {
+        public abstract Department Type { get; }
+        public ClientWindow()
+        {
+            if (LicenseManager.UsageMode == LicenseUsageMode.Designtime)
+            {
+                return;
+            }
+            InitializeComponent();
+        } // TALK ABOUT LOG
+    }
+}
+namespace PrintPress.UI
+{
+    abstract partial class ClientWindow
+    {
+        /// <summary>
+        /// Required designer variable.
+        /// </summary>
+        private System.ComponentModel.IContainer components = null;
+
+        /// <summary>
+        /// Clean up any resources being used.
+        /// </summary>
+        /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && (components != null))
+            {
+                components.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        #region Windows Form Designer generated code
+
+        /// <summary>
+        /// Required method for Designer support - do not modify
+        /// the contents of this method with the code editor.
+        /// </summary>
+        private void InitializeComponent()
+        {
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(ClientWindow));
+            toolStrip1 = new ToolStrip();
+            toolStripDropDownButton1 = new ToolStripDropDownButton();
+            yoToolStripMenuItem = new ToolStripMenuItem();
+            toolStripDropDownButton2 = new ToolStripDropDownButton();
+            undoToolStripMenuItem = new ToolStripMenuItem();
+            redoToolStripMenuItem = new ToolStripMenuItem();
+            toolStrip1.SuspendLayout();
+            SuspendLayout();
+            // 
+            // toolStrip1
+            // 
+            toolStrip1.ImageScalingSize = new Size(20, 20);
+            toolStrip1.Items.AddRange(new ToolStripItem[] { toolStripDropDownButton1, toolStripDropDownButton2 });
+            toolStrip1.Location = new Point(0, 0);
+            toolStrip1.Name = "toolStrip1";
+            toolStrip1.RenderMode = ToolStripRenderMode.Professional;
+            toolStrip1.Size = new Size(1218, 27);
+            toolStrip1.TabIndex = 0;
+            toolStrip1.Text = "toolStrip1";
+            // 
+            // toolStripDropDownButton1
+            // 
+            toolStripDropDownButton1.DisplayStyle = ToolStripItemDisplayStyle.Text;
+            toolStripDropDownButton1.DropDownItems.AddRange(new ToolStripItem[] { yoToolStripMenuItem });
+            toolStripDropDownButton1.ImageTransparentColor = Color.Magenta;
+            toolStripDropDownButton1.Name = "toolStripDropDownButton1";
+            toolStripDropDownButton1.Size = new Size(46, 24);
+            toolStripDropDownButton1.Text = "File";
+            // 
+            // yoToolStripMenuItem
+            // 
+            yoToolStripMenuItem.Name = "yoToolStripMenuItem";
+            yoToolStripMenuItem.Size = new Size(116, 26);
+            yoToolStripMenuItem.Text = "Exit";
+            // 
+            // toolStripDropDownButton2
+            // 
+            toolStripDropDownButton2.DisplayStyle = ToolStripItemDisplayStyle.Text;
+            toolStripDropDownButton2.DropDownItems.AddRange(new ToolStripItem[] { undoToolStripMenuItem, redoToolStripMenuItem });
+            toolStripDropDownButton2.Image = (Image)resources.GetObject("toolStripDropDownButton2.Image");
+            toolStripDropDownButton2.ImageTransparentColor = Color.Magenta;
+            toolStripDropDownButton2.Name = "toolStripDropDownButton2";
+            toolStripDropDownButton2.Size = new Size(49, 24);
+            toolStripDropDownButton2.Text = "Edit";
+            // 
+            // undoToolStripMenuItem
+            // 
+            undoToolStripMenuItem.Enabled = false;
+            undoToolStripMenuItem.Name = "undoToolStripMenuItem";
+            undoToolStripMenuItem.Size = new Size(128, 26);
+            undoToolStripMenuItem.Text = "Undo";
+            // 
+            // redoToolStripMenuItem
+            // 
+            redoToolStripMenuItem.Enabled = false;
+            redoToolStripMenuItem.Name = "redoToolStripMenuItem";
+            redoToolStripMenuItem.Size = new Size(128, 26);
+            redoToolStripMenuItem.Text = "Redo";
+            // 
+            // ClientWindow
+            // 
+            AutoScaleDimensions = new SizeF(8F, 20F);
+            AutoScaleMode = AutoScaleMode.Font;
+            ClientSize = new Size(1218, 671);
+            Controls.Add(toolStrip1);
+            Name = "ClientWindow";
+            Text = "ClientWindow";
+            toolStrip1.ResumeLayout(false);
+            toolStrip1.PerformLayout();
+            ResumeLayout(false);
+            PerformLayout();
+        }
+
+        #endregion
+
+        protected ToolStrip toolStrip1;
+        protected ToolStripDropDownButton toolStripDropDownButton1;
+        protected ToolStripMenuItem yoToolStripMenuItem;
+        protected ToolStripDropDownButton toolStripDropDownButton2;
+        protected ToolStripMenuItem undoToolStripMenuItem;
+        protected ToolStripMenuItem redoToolStripMenuItem;
+    }
+}
+using PrintPress.Data;
+
+namespace PrintPress.UI
+{
+#if DEBUG
+    internal abstract partial class ContentWindow : PrintPress.UI.Tools.DummyClient
+#else
+    internal abstract partial class ContentWindow : PrintPress.UI.ClientWindow
+#endif
+    {
+        protected bool UpdatingDisplay { get; set; } = false;
+        public ContentWindow() : base()
+        {
+            InitializeComponent();
+        }
+
+        protected virtual void contentListView_SelectedIndexChanged(object sender, EventArgs e) { }
+
+        protected virtual void UpdateContentDisplay(ContentData? content)
+        {
+            if (content == null)
+            {
+                return;
+            }
+
+            UpdatingDisplay = true;
+
+            titleText.Text = content.Title;
+            contentText.Text = content.Text;
+            contentStatusComboBox.SelectedIndex = (int)content.State;
+            notesText.Text = content.Notes;
+            commentsText.Text = content.Comments;
+            SetSavedStateLabel(content.LocalChanges);
+
+            UpdatingDisplay = false;
+        }
+
+        protected virtual void UpdateContentListDisplay<T>(List<T> employeeContent) where T : ContentData
+        {
+            contentListView.BeginUpdate();
+            contentListView.Items.Clear();
+
+            foreach (T content in employeeContent)
+            {
+                string text = content.Title;
+                if (text == string.Empty)
+                {
+                    text = "_untitled_";
+                }
+                ListViewItem item = new ListViewItem(text, contentListView.Groups[(int)content.State]);
+                item.Tag = content.ContentID;
+                contentListView.Items.Add(item);
+            }
+
+            contentListView.EndUpdate();
+        }
+
+        protected void SetSavedStateLabel(bool localChanges)
+        {
+            if (!localChanges)
+            {
+                saveStateLabel.Text = "saved";
+                saveStateLabel.ForeColor = Color.Green;
+                return;
+            }
+            saveStateLabel.Text = "unsaved changes";
+            saveStateLabel.ForeColor = Color.OrangeRed;
+
+            saveStateTitleLabel.Location = new Point(saveStateLabel.Location.X - 92, saveStateLabel.Location.Y);
+        }
+
+        // Abstract event calls, for specific implementation
+
+        protected abstract void contentText_TextChanged(object sender, EventArgs e);
+        protected abstract void titleText_TextChanged(object sender, EventArgs e);
+        protected abstract void notesText_TextChanged(object sender, EventArgs e);
+        protected abstract void comboBox1_SelectedIndexChanged(object sender, EventArgs e);
+        protected abstract void contentStatusComboBox_SelectedIndexChanged(object sender, EventArgs e);
+    }
+}
+
+namespace PrintPress.UI
+{
+    #if DEBUG
+    internal partial class ContentWindow : PrintPress.UI.Tools.DummyClient
+    #else
+    internal partial class ContentWindow : PrintPress.UI.ClientWindow
+    #endif
+    {
+        /// <summary>
+        /// Required designer variable.
+        /// </summary>
+        private System.ComponentModel.IContainer components = null;
+
+        /// <summary>
+        /// Clean up any resources being used.
+        /// </summary>
+        /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && (components != null))
+            {
+                components.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        #region Windows Form Designer generated code
+
+        /// <summary>
+        /// Required method for Designer support - do not modify
+        /// the contents of this method with the code editor.
+        /// </summary>
+        private void InitializeComponent()
+        {
+            ListViewGroup listViewGroup6 = new ListViewGroup("In Progress", HorizontalAlignment.Left);
+            ListViewGroup listViewGroup7 = new ListViewGroup("Returned", HorizontalAlignment.Left);
+            ListViewGroup listViewGroup8 = new ListViewGroup("Awaiting review", HorizontalAlignment.Left);
+            ListViewGroup listViewGroup9 = new ListViewGroup("In use", HorizontalAlignment.Left);
+            ListViewGroup listViewGroup10 = new ListViewGroup("Retired", HorizontalAlignment.Left);
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(ContentWindow));
+            contentText = new TextBox();
+            contentListView = new ListView();
+            label1 = new Label();
+            label2 = new Label();
+            titleText = new TextBox();
+            label3 = new Label();
+            submitButton = new Button();
+            createButton = new Button();
+            deleteButton = new Button();
+            pictureBox1 = new PictureBox();
+            saveStateTitleLabel = new Label();
+            saveStateLabel = new Label();
+            saveButton = new Button();
+            label8 = new Label();
+            label7 = new Label();
+            uploadImageButton = new Button();
+            removeImageButton = new Button();
+            label6 = new Label();
+            notesText = new TextBox();
+            label4 = new Label();
+            commentsText = new TextBox();
+            label5 = new Label();
+            contentStatusComboBox = new ComboBox();
+            ((System.ComponentModel.ISupportInitialize)pictureBox1).BeginInit();
+            SuspendLayout();
+            // 
+            // contentText
+            // 
+            contentText.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            contentText.Location = new Point(283, 103);
+            contentText.Multiline = true;
+            contentText.Name = "contentText";
+            contentText.ScrollBars = ScrollBars.Vertical;
+            contentText.Size = new Size(694, 417);
+            contentText.TabIndex = 1;
+            contentText.TextChanged += contentText_TextChanged;
+            // 
+            // contentListView
+            // 
+            contentListView.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left;
+            listViewGroup6.CollapsedState = ListViewGroupCollapsedState.Expanded;
+            listViewGroup6.Header = "In Progress";
+            listViewGroup6.Name = "inProgressGroup";
+            listViewGroup7.Header = "Returned";
+            listViewGroup7.Name = "returnedGroup";
+            listViewGroup8.Header = "Awaiting review";
+            listViewGroup8.Name = "awaitingReviewGroup";
+            listViewGroup9.Header = "In use";
+            listViewGroup9.Name = "inUseGroup";
+            listViewGroup10.Header = "Retired";
+            listViewGroup10.Name = "retiredGroup";
+            contentListView.Groups.AddRange(new ListViewGroup[] { listViewGroup6, listViewGroup7, listViewGroup8, listViewGroup9, listViewGroup10 });
+            contentListView.HeaderStyle = ColumnHeaderStyle.None;
+            contentListView.ImeMode = ImeMode.Off;
+            contentListView.Location = new Point(12, 50);
+            contentListView.Name = "contentListView";
+            contentListView.Size = new Size(265, 782);
+            contentListView.TabIndex = 2;
+            contentListView.UseCompatibleStateImageBehavior = false;
+            contentListView.View = View.SmallIcon;
+            contentListView.SelectedIndexChanged += contentListView_SelectedIndexChanged;
+            // 
+            // label1
+            // 
+            label1.AutoSize = true;
+            label1.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            label1.Location = new Point(12, 27);
+            label1.Name = "label1";
+            label1.Size = new Size(133, 20);
+            label1.TabIndex = 5;
+            label1.Text = "Assigned Content";
+            // 
+            // label2
+            // 
+            label2.AutoSize = true;
+            label2.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            label2.Location = new Point(283, 27);
+            label2.Name = "label2";
+            label2.Size = new Size(40, 20);
+            label2.TabIndex = 6;
+            label2.Text = "Title";
+            // 
+            // titleText
+            // 
+            titleText.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            titleText.Location = new Point(283, 50);
+            titleText.Name = "titleText";
+            titleText.Size = new Size(694, 27);
+            titleText.TabIndex = 7;
+            titleText.TextChanged += titleText_TextChanged;
+            // 
+            // label3
+            // 
+            label3.AutoSize = true;
+            label3.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            label3.Location = new Point(283, 80);
+            label3.Name = "label3";
+            label3.Size = new Size(97, 20);
+            label3.TabIndex = 8;
+            label3.Text = "Content text";
+            // 
+            // submitButton
+            // 
+            submitButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            submitButton.Location = new Point(1254, 838);
+            submitButton.Name = "submitButton";
+            submitButton.Size = new Size(151, 29);
+            submitButton.TabIndex = 9;
+            submitButton.Text = "Submit for review";
+            submitButton.UseVisualStyleBackColor = true;
+            // 
+            // createButton
+            // 
+            createButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            createButton.Location = new Point(25, 838);
+            createButton.Name = "createButton";
+            createButton.Size = new Size(123, 29);
+            createButton.TabIndex = 11;
+            createButton.Text = "Create";
+            createButton.UseVisualStyleBackColor = true;
+            // 
+            // deleteButton
+            // 
+            deleteButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            deleteButton.Location = new Point(154, 838);
+            deleteButton.Name = "deleteButton";
+            deleteButton.Size = new Size(123, 29);
+            deleteButton.TabIndex = 12;
+            deleteButton.Text = "Delete";
+            deleteButton.UseVisualStyleBackColor = true;
+            // 
+            // pictureBox1
+            // 
+            pictureBox1.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Right;
+            pictureBox1.Location = new Point(983, 103);
+            pictureBox1.Name = "pictureBox1";
+            pictureBox1.Size = new Size(423, 417);
+            pictureBox1.TabIndex = 13;
+            pictureBox1.TabStop = false;
+            // 
+            // saveStateTitleLabel
+            // 
+            saveStateTitleLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            saveStateTitleLabel.AutoSize = true;
+            saveStateTitleLabel.BackColor = SystemColors.ControlLight;
+            saveStateTitleLabel.Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            saveStateTitleLabel.Location = new Point(1266, 27);
+            saveStateTitleLabel.Name = "saveStateTitleLabel";
+            saveStateTitleLabel.Size = new Size(85, 20);
+            saveStateTitleLabel.TabIndex = 14;
+            saveStateTitleLabel.Text = "Save State:";
+            // 
+            // saveStateLabel
+            // 
+            saveStateLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            saveStateLabel.AutoSize = true;
+            saveStateLabel.BackColor = SystemColors.ControlLight;
+            saveStateLabel.Font = new Font("Segoe UI Semibold", 9F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0);
+            saveStateLabel.ForeColor = Color.Green;
+            saveStateLabel.Location = new Point(1358, 27);
+            saveStateLabel.Name = "saveStateLabel";
+            saveStateLabel.RightToLeft = RightToLeft.Yes;
+            saveStateLabel.Size = new Size(49, 20);
+            saveStateLabel.TabIndex = 15;
+            saveStateLabel.Text = "saved";
+            saveStateLabel.TextAlign = ContentAlignment.TopRight;
+            // 
+            // saveButton
+            // 
+            saveButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            saveButton.Location = new Point(1148, 838);
+            saveButton.Name = "saveButton";
+            saveButton.Size = new Size(100, 29);
+            saveButton.TabIndex = 16;
+            saveButton.Text = "Save";
+            saveButton.UseVisualStyleBackColor = true;
+            // 
+            // label8
+            // 
+            label8.AutoSize = true;
+            label8.Location = new Point(783, 399);
+            label8.Name = "label8";
+            label8.Size = new Size(0, 20);
+            label8.TabIndex = 20;
+            // 
+            // label7
+            // 
+            label7.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            label7.AutoSize = true;
+            label7.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            label7.Location = new Point(983, 80);
+            label7.Name = "label7";
+            label7.Size = new Size(53, 20);
+            label7.TabIndex = 21;
+            label7.Text = "Image";
+            // 
+            // uploadImageButton
+            // 
+            uploadImageButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            uploadImageButton.Location = new Point(1144, 526);
+            uploadImageButton.Name = "uploadImageButton";
+            uploadImageButton.Size = new Size(128, 29);
+            uploadImageButton.TabIndex = 22;
+            uploadImageButton.Text = "Upload image";
+            uploadImageButton.UseVisualStyleBackColor = true;
+            // 
+            // removeImageButton
+            // 
+            removeImageButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            removeImageButton.Location = new Point(1278, 526);
+            removeImageButton.Name = "removeImageButton";
+            removeImageButton.Size = new Size(128, 29);
+            removeImageButton.TabIndex = 23;
+            removeImageButton.Text = "Remove image";
+            removeImageButton.UseVisualStyleBackColor = true;
+            // 
+            // label6
+            // 
+            label6.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            label6.AutoSize = true;
+            label6.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            label6.Location = new Point(283, 582);
+            label6.Name = "label6";
+            label6.Size = new Size(122, 20);
+            label6.TabIndex = 18;
+            label6.Text = "Notes for Editor";
+            // 
+            // notesText
+            // 
+            notesText.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            notesText.Location = new Point(283, 605);
+            notesText.Multiline = true;
+            notesText.Name = "notesText";
+            notesText.ScrollBars = ScrollBars.Vertical;
+            notesText.Size = new Size(694, 118);
+            notesText.TabIndex = 17;
+            notesText.TextChanged += notesText_TextChanged;
+            // 
+            // label4
+            // 
+            label4.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            label4.AutoSize = true;
+            label4.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            label4.Location = new Point(283, 726);
+            label4.Name = "label4";
+            label4.Size = new Size(129, 20);
+            label4.TabIndex = 25;
+            label4.Text = "Editor comments";
+            // 
+            // commentsText
+            // 
+            commentsText.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            commentsText.Location = new Point(283, 749);
+            commentsText.Multiline = true;
+            commentsText.Name = "commentsText";
+            commentsText.ReadOnly = true;
+            commentsText.ScrollBars = ScrollBars.Vertical;
+            commentsText.Size = new Size(694, 118);
+            commentsText.TabIndex = 24;
+            // 
+            // label5
+            // 
+            label5.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            label5.AutoSize = true;
+            label5.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            label5.Location = new Point(283, 523);
+            label5.Name = "label5";
+            label5.Size = new Size(53, 20);
+            label5.TabIndex = 26;
+            label5.Text = "Status";
+            // 
+            // contentStatusComboBox
+            // 
+            contentStatusComboBox.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            contentStatusComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
+            contentStatusComboBox.FormattingEnabled = true;
+            contentStatusComboBox.Items.AddRange(new object[] { "In Progress", "Awaiting Review", "Returned", "In Use", "Retired" });
+            contentStatusComboBox.Location = new Point(283, 546);
+            contentStatusComboBox.Name = "contentStatusComboBox";
+            contentStatusComboBox.Size = new Size(255, 28);
+            contentStatusComboBox.TabIndex = 28;
+            contentStatusComboBox.SelectedIndexChanged += contentStatusComboBox_SelectedIndexChanged;
+            // 
+            // ContentWindow
+            // 
+            AutoScaleDimensions = new SizeF(8F, 20F);
+            BackColor = SystemColors.ControlLight;
+            ClientSize = new Size(1418, 879);
+            Controls.Add(contentStatusComboBox);
+            Controls.Add(label5);
+            Controls.Add(label4);
+            Controls.Add(commentsText);
+            Controls.Add(saveStateLabel);
+            Controls.Add(saveStateTitleLabel);
+            Controls.Add(removeImageButton);
+            Controls.Add(uploadImageButton);
+            Controls.Add(label7);
+            Controls.Add(label8);
+            Controls.Add(label6);
+            Controls.Add(notesText);
+            Controls.Add(saveButton);
+            Controls.Add(pictureBox1);
+            Controls.Add(deleteButton);
+            Controls.Add(createButton);
+            Controls.Add(submitButton);
+            Controls.Add(label3);
+            Controls.Add(titleText);
+            Controls.Add(label2);
+            Controls.Add(label1);
+            Controls.Add(contentListView);
+            Controls.Add(contentText);
+            Icon = (Icon)resources.GetObject("$this.Icon");
+            Name = "ContentWindow";
+            Text = " ";
+            Controls.SetChildIndex(contentText, 0);
+            Controls.SetChildIndex(contentListView, 0);
+            Controls.SetChildIndex(label1, 0);
+            Controls.SetChildIndex(label2, 0);
+            Controls.SetChildIndex(titleText, 0);
+            Controls.SetChildIndex(label3, 0);
+            Controls.SetChildIndex(submitButton, 0);
+            Controls.SetChildIndex(createButton, 0);
+            Controls.SetChildIndex(deleteButton, 0);
+            Controls.SetChildIndex(pictureBox1, 0);
+            Controls.SetChildIndex(saveButton, 0);
+            Controls.SetChildIndex(notesText, 0);
+            Controls.SetChildIndex(label6, 0);
+            Controls.SetChildIndex(label8, 0);
+            Controls.SetChildIndex(label7, 0);
+            Controls.SetChildIndex(uploadImageButton, 0);
+            Controls.SetChildIndex(removeImageButton, 0);
+            Controls.SetChildIndex(saveStateTitleLabel, 0);
+            Controls.SetChildIndex(saveStateLabel, 0);
+            Controls.SetChildIndex(commentsText, 0);
+            Controls.SetChildIndex(label4, 0);
+            Controls.SetChildIndex(label5, 0);
+            Controls.SetChildIndex(contentStatusComboBox, 0);
+            ((System.ComponentModel.ISupportInitialize)pictureBox1).EndInit();
+            ResumeLayout(false);
+            PerformLayout();
+        }
+
+        #endregion
+
+        protected TextBox contentText;
+        protected ListView contentListView;
+        protected Label label1;
+        protected Label label2;
+        protected TextBox titleText;
+        protected Label label3;
+        protected Button submitButton;
+        protected Button createButton;
+        protected Button deleteButton;
+        protected PictureBox pictureBox1;
+        protected Label saveStateTitleLabel;
+        protected Label saveStateLabel;
+        protected Button saveButton;
+        protected Label label8;
+        protected Label label7;
+        protected Button uploadImageButton;
+        protected Button removeImageButton;
+        protected Label label6;
+        protected TextBox notesText;
+        protected Label label4;
+        protected TextBox commentsText;
+        protected Label label5;
+        protected ComboBox contentStatusComboBox;
+    }
+}
+using PrintPress.Data.Enum;
+using PrintPress.UIService;
+using PrintPress.UIService.Abstract;
+using PrintPress.UIWindow.Interface;
+
+namespace PrintPress.UI.Tools
+{
+    internal partial class DummyClient : ClientWindow
+    {
+        public DummyClient() : base() { }
+        public override Department Type { get { return Department.Marketing; } } // Default 
+    }
+}
+namespace PrintPress.UI.Tools
+{
+    partial class DummyClient
+    {
+        /// <summary>
+        /// Required designer variable.
+        /// </summary>
+        private System.ComponentModel.IContainer components = null;
+
+        /// <summary>
+        /// Clean up any resources being used.
+        /// </summary>
+        /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && (components != null))
+            {
+                components.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        #region Windows Form Designer generated code
+
+        /// <summary>
+        /// Required method for Designer support - do not modify
+        /// the contents of this method with the code editor.
+        /// </summary>
+        private void InitializeComponent()
+        {
+            this.components = new System.ComponentModel.Container();
+            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+            this.ClientSize = new System.Drawing.Size(800, 450);
+            this.Text = "DummyClient";
+        }
+
+        #endregion
+    }
+}
+using PrintPress.UIService;
+using PrintPress.UIService.Abstract;
+
+namespace PrintPress.UI.Tools
+{
+    internal partial class DummyContent : ContentWindow
+    {
+        public DummyContent() : base() { }
+        protected override void titleText_TextChanged(object sender, EventArgs e)
+        {
+            throw new NotImplementedException();
+        }
+        protected override void contentText_TextChanged(object sender, EventArgs e)
+        {
+            throw new NotImplementedException();
+        }
+        protected override void notesText_TextChanged(object sender, EventArgs e)
+        {
+            throw new NotImplementedException();
+        }
+        protected override void comboBox1_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            throw new NotImplementedException();
+        }
+        protected override void contentStatusComboBox_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            throw new NotImplementedException();
+        }
+    }
+}
+namespace PrintPress.UI.Tools
+{
+    partial class DummyContent
+    {
+        /// <summary>
+        /// Required designer variable.
+        /// </summary>
+        private System.ComponentModel.IContainer components = null;
+
+        /// <summary>
+        /// Clean up any resources being used.
+        /// </summary>
+        /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && (components != null))
+            {
+                components.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        #region Windows Form Designer generated code
+
+        /// <summary>
+        /// Required method for Designer support - do not modify
+        /// the contents of this method with the code editor.
+        /// </summary>
+        private void InitializeComponent()
+        {
+            this.components = new System.ComponentModel.Container();
+            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+            this.ClientSize = new System.Drawing.Size(800, 450);
+            this.Text = "DummyClient";
+        }
+
+        #endregion
+    }
+}
+namespace PrintPress.UI.Enum
+{
+    public enum StatusLabelColour
+    {
+        Grey,
+        Red,
+        Green
+    }
+}
+using PrintPress.Controller.Data;
+using PrintPress.Data.Enum;
+using PrintPress.UIService;
+using PrintPress.UIService.Abstract;
+
+namespace PrintPress.UIWindow.Interface
+{
+    internal interface IConcreteClientWindow<T> where T : ClientService<T>
+    {
+        public T Service { get; init; }
+        public Department Type { get { return Service.Type; } }
+        public string Name
+        {
+            get
+            {
+                if (DataTools.DepartmentString(Type, out string name))
+                    return name;
+                throw new NotImplementedException("Client service does not implement a department type.");
+            }
+        }
+    }
+}
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace PrintPress.UIWindow.Interface
+{
+    internal interface IContentWindow
+    {
+
+    }
+}
+[assembly: Parallelize(Scope = ExecutionScope.MethodLevel)]
+using PrintPress.Controller;
+using PrintPress.Controller.Enum;
+using PrintPress.Data;
+using PrintPress.Data.Builder;
+using PrintPress.Data.Enum;
+using PrintPressUnitTesting.DataController.Tools;
+
+namespace PrintPressUnitTesting.DataController
+{
+    [TestClass]
+    public sealed class DataControllerTests
+    {
+        [TestMethod]
+        public void AllTests()
+        {
+            FullStoryTableTest();
+        }
+
+        [TestMethod]
+        public void FullStoryTableTest()
+        {
+            CommercialDataController commercialDataController = new CommercialDataController();
+            // Run test on advert table
+            MockCommercialDataController.Instance.Initialise();
+
+            // Check that adverts mock advert table is empty
+            CommandReturnState firstReadState = MockCommercialDataController.Instance.GetStories(0, out StoryData[] _, out string readErrMsg);
+            Assert.IsTrue(firstReadState == CommandReturnState.NOTFOUND, $"Unexpected DB state with error: {readErrMsg}");
+
+            // Generate test data
+            StoryData storyData = GenerateTestStory();
+
+            // Allocate space on database
+            bool allocateSuccess = MockCommercialDataController.Instance.AllocateStory(storyData.Assigned.Id, out int advertAutoId);
+            Assert.IsTrue(allocateSuccess, $"Could not allocate space for story for employee: {storyData.Assigned.Id}");
+
+            // Write story data
+            bool writeSuccess = MockCommercialDataController.Instance.UpdateStory(storyData);
+            Assert.IsTrue(writeSuccess, $"Failed to write story to database");
+
+            // CLEANUP
+            // Delete story
+            bool deleteSuccess = MockCommercialDataController.Instance.DeleteContent(storyData.ContentID);
+            Assert.IsTrue(writeSuccess, $"Failed to delete story from database");
+
+            // Verify cleanup, check mock table is empty
+            CommandReturnState secondReadState = MockCommercialDataController.Instance.GetStories(0, out StoryData[] _, out readErrMsg);
+            Assert.IsTrue(secondReadState == CommandReturnState.NOTFOUND, $"Unexpected DB state with error: {readErrMsg}");
+        }
+
+        private static StoryData GenerateTestStory()
+        {
+            PersonalData personalData = GenerateTestPersonalData();
+
+            EmployeeData employeeData = new EmployeeData(0, personalData, "test", [Department.Journalism, Department.Editing]);
+
+            StoryBuilder storyBuilder = new StoryBuilder();
+            storyBuilder.Text = "test";
+            storyBuilder.Notes = "test";
+            storyBuilder.State = ContentState.IN_PROGRESS;
+            storyBuilder.Assigned = employeeData;
+            storyBuilder.ContentID = -1;
+            storyBuilder.Comments = "test";
+            storyBuilder.Source = "test";
+
+            return storyBuilder.ToStoryData();
+        }
+
+        private static PersonalData GenerateTestPersonalData()
+        {
+            Address testAddress = GenerateTestAddress();
+
+            PersonalDataBuilder personBuilder = new PersonalDataBuilder();
+
+            personBuilder.Address = testAddress;
+            personBuilder.Email = "test@test.com";
+            personBuilder.FirstNames = "test";
+            personBuilder.LastName = "test";
+            personBuilder.Phone = "test";
+
+            return personBuilder.ToPersonalData();
+        }
+
+        private static Address GenerateTestAddress()
+        {
+            AddressBuilder addressBuilder = new AddressBuilder();
+            addressBuilder.Road = "test";
+            addressBuilder.HouseNameOrNumber = "test";
+            addressBuilder.Country = "test";
+            addressBuilder.City = "test";
+            addressBuilder.Country = "test";
+            addressBuilder.Postcode = "test";
+
+            return addressBuilder.ToAddress();
+        }
+    }
+}
+using PrintPress.Controller;
+
+namespace PrintPressUnitTesting.DataController.Tools
+{
+    internal class MockCommercialDataController : CommercialDataController
+    {
+        private CommercialDataController _instance;
+        public override void ActiveInitialise()
+        {
+            Initialise("MockCommercialData");
+        }
+    }
+}
+// <autogenerated />
+using System;
+using System.Reflection;
+[assembly: global::System.Runtime.Versioning.TargetFrameworkAttribute(".NETCoreApp,Version=v8.0", FrameworkDisplayName = ".NET 8.0")]
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by a tool.
+//     Runtime Version:4.0.30319.42000
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+using System;
+using System.Reflection;
+
+[assembly: System.Reflection.AssemblyCompanyAttribute("PrintPressUnitTesting")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+f21b58c7b4fc0110a1b810540cb53cdb5d03cf74")]
+[assembly: System.Reflection.AssemblyProductAttribute("PrintPressUnitTesting")]
+[assembly: System.Reflection.AssemblyTitleAttribute("PrintPressUnitTesting")]
+[assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
+
+// Generated by the MSBuild WriteCodeFragment class.
+
+// <auto-generated/>
+global using global::Microsoft.VisualStudio.TestTools.UnitTesting;
+global using global::System;
+global using global::System.Collections.Generic;
+global using global::System.IO;
+global using global::System.Linq;
+global using global::System.Net.Http;
+global using global::System.Threading;
+global using global::System.Threading.Tasks;
+// <autogenerated />
+using System;
+using System.Reflection;
+[assembly: global::System.Runtime.Versioning.TargetFrameworkAttribute(".NETCoreApp,Version=v8.0", FrameworkDisplayName = ".NET 8.0")]
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by a tool.
+//     Runtime Version:4.0.30319.42000
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+using System;
+using System.Reflection;
+
+[assembly: System.Reflection.AssemblyCompanyAttribute("PrintPressUnitTesting")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+f21b58c7b4fc0110a1b810540cb53cdb5d03cf74")]
+[assembly: System.Reflection.AssemblyProductAttribute("PrintPressUnitTesting")]
+[assembly: System.Reflection.AssemblyTitleAttribute("PrintPressUnitTesting")]
+[assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
+[assembly: System.Runtime.Versioning.TargetPlatformAttribute("Windows7.0")]
+[assembly: System.Runtime.Versioning.SupportedOSPlatformAttribute("Windows7.0")]
+
+// Generated by the MSBuild WriteCodeFragment class.
+
+// <auto-generated/>
+global using global::Microsoft.VisualStudio.TestTools.UnitTesting;
+global using global::System;
+global using global::System.Collections.Generic;
+global using global::System.IO;
+global using global::System.Linq;
+global using global::System.Net.Http;
+global using global::System.Threading;
+global using global::System.Threading.Tasks;
