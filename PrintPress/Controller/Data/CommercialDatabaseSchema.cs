@@ -1,9 +1,16 @@
-﻿using System.Data;
-
-namespace PrintPress.Controller.Data
+﻿namespace PrintPress.Controller.Data
 {
+    /// <summary>
+    /// Represents the database schema for the Commercial Data Controller.
+    /// Defines table schemas required for managing employee, content, and related data.
+    /// </summary>
     public class CommercialDatabaseSchema : IDatabaseSchema
     {
+        #region Properties
+
+        /// <summary>
+        /// Gets all the table schemas defined in the commercial database.
+        /// </summary>
         public TableSchema[] AllTables
         {
             get
@@ -15,18 +22,53 @@ namespace PrintPress.Controller.Data
                     Clearance,
                     Content,
                     Story,
-                    Advert];
+                    Advert
+                ];
             }
         }
 
+        /// <summary>
+        /// Gets the schema for the "EMPLOYEE" table, used for storing employee information.
+        /// </summary>
         public TableSchema Employee { get { return employeeTable; } }
+
+        /// <summary>
+        /// Gets the schema for the "PERSONALDATA" table, used for storing personal details.
+        /// </summary>
         public TableSchema Person { get { return personTable; } }
+
+        /// <summary>
+        /// Gets the schema for the "ADDRESS" table, used for storing address details.
+        /// </summary>
         public TableSchema Address { get { return addressTable; } }
+
+        /// <summary>
+        /// Gets the schema for the "CLEARANCE" table, used for managing employee clearances.
+        /// </summary>
         public TableSchema Clearance { get { return clearanceTable; } }
+
+        /// <summary>
+        /// Gets the schema for the "CONTENT" table, used for storing general content information.
+        /// </summary>
         public TableSchema Content { get { return contentTable; } }
+
+        /// <summary>
+        /// Gets the schema for the "STORY" table, used for storing story-specific content.
+        /// </summary>
         public TableSchema Story { get { return storyTable; } }
+
+        /// <summary>
+        /// Gets the schema for the "ADVERT" table, used for storing advert-specific content.
+        /// </summary>
         public TableSchema Advert { get { return advertTable; } }
 
+        #endregion
+
+        #region Static Table Definitions
+
+        /// <summary>
+        /// Defines the schema for the "EMPLOYEE" table.
+        /// </summary>
         private static readonly TableSchema employeeTable = new TableSchema(
             "EMPLOYEE",
             [
@@ -35,6 +77,9 @@ namespace PrintPress.Controller.Data
                 ["JobTitle", "NVARCHAR(20) NOT NULL"]
             ]);
 
+        /// <summary>
+        /// Defines the schema for the "PERSONALDATA" table.
+        /// </summary>
         private static readonly TableSchema personTable = new TableSchema(
             "PERSONALDATA",
             [
@@ -46,6 +91,9 @@ namespace PrintPress.Controller.Data
                 ["PhoneNum", "NVARCHAR(20)"]
             ]);
 
+        /// <summary>
+        /// Defines the schema for the "ADDRESS" table.
+        /// </summary>
         public static readonly TableSchema addressTable = new TableSchema(
             "ADDRESS",
             [
@@ -58,6 +106,9 @@ namespace PrintPress.Controller.Data
                 ["Postcode", "NVARCHAR(30) NOT NULL"]
             ]);
 
+        /// <summary>
+        /// Defines the schema for the "CLEARANCE" table.
+        /// </summary>
         public static readonly TableSchema clearanceTable = new TableSchema(
             "CLEARANCE",
             [
@@ -65,6 +116,9 @@ namespace PrintPress.Controller.Data
                 ["DepartmentID", "INT NOT NULL"]
             ]);
 
+        /// <summary>
+        /// Defines the schema for the "CONTENT" table.
+        /// </summary>
         private static readonly TableSchema contentTable = new TableSchema(
             "CONTENT",
             [
@@ -79,6 +133,9 @@ namespace PrintPress.Controller.Data
                 ["LastSaved", "DATETIME NOT NULL"]
             ]);
 
+        /// <summary>
+        /// Defines the schema for the "STORY" table.
+        /// </summary>
         private static readonly TableSchema storyTable = new TableSchema(
            "STORY",
            [
@@ -86,11 +143,16 @@ namespace PrintPress.Controller.Data
                 ["Source", "VARCHAR(100) NOT NULL"]
            ]);
 
+        /// <summary>
+        /// Defines the schema for the "ADVERT" table.
+        /// </summary>
         private static readonly TableSchema advertTable = new TableSchema(
             "ADVERT",
             [
                 ["ContentID", "INT PRIMARY KEY"],
                 ["ContactID", "INT NOT NULL"]
             ]);
+
+        #endregion
     }
 }

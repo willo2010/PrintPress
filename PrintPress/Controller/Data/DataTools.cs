@@ -1,7 +1,4 @@
-﻿using Microsoft.Data.SqlClient;
-using Microsoft.EntityFrameworkCore.Metadata.Internal;
-using PrintPress.Data.Enum;
-using System.Data;
+﻿using PrintPress.Data.Enum;
 using System.Text;
 
 namespace PrintPress.Controller.Data

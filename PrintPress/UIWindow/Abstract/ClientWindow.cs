@@ -13,6 +13,6 @@ namespace PrintPress.UI
                 return;
             }
             InitializeComponent();
-        } // TALK ABOUT LOG
+        }
     }
 }

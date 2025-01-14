@@ -1,6 +1,5 @@
 ﻿using PrintPress.Data.Enum;
 using PrintPress.UIService;
-using PrintPress.UIWindow.Interface;
 
 namespace PrintPress.UI
 {

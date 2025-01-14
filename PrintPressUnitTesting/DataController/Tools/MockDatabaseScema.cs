@@ -2,18 +2,31 @@
 
 namespace PrintPressUnitTesting.DataController.Tools
 {
-    public class MockDatabaseScema : IDatabaseSchema
+    /// <summary>
+    /// A mock implementation of the <see cref="IDatabaseSchema"/> interface for unit testing.
+    /// Provides a test-specific schema to simulate database tables and structure.
+    /// </summary>
+    public class MockDatabaseSchema : IDatabaseSchema
     {
-        public TableSchema[] AllTables 
-        { 
+        /// <summary>
+        /// Gets all the table schemas defined in the mock database.
+        /// </summary>
+        public TableSchema[] AllTables
+        {
             get
             {
                 return [CredentialTable];
             }
         }
 
+        /// <summary>
+        /// Gets the schema for the "Credential" table used in tests.
+        /// </summary>
         public TableSchema CredentialTable { get { return credentialTable; } }
 
+        /// <summary>
+        /// Static definition of the "Credential" table schema for mock data.
+        /// </summary>
         private static readonly TableSchema credentialTable = new TableSchema(
             "TEST",
             [

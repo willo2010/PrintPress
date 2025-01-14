@@ -2,9 +2,7 @@
 using PrintPress.Controller.Data;
 using PrintPress.Controller.Enum;
 using PrintPress.Data;
-using PrintPress.Data.Builder;
 using PrintPress.Data.Enum;
-using System.Diagnostics.Tracing;
 using System.Net.Mail;
 
 namespace PrintPress.UI
@@ -72,7 +70,7 @@ namespace PrintPress.UI
         private void sendClassifiedSqlButton_Click(object sender, EventArgs e)
         {
             if (ClassifiedDataController.Instance.SendSql(clasSqlStringText.Text, out string result) ==
-                Controller.Enum.CommandReturnState.FOUND) MessageBox.Show(result);
+                CommandReturnState.FOUND) MessageBox.Show(result);
         }
 
         private void addEmployeeButton_Click(object sender, EventArgs e)

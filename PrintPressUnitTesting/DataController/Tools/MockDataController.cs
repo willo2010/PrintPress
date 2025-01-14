@@ -5,12 +5,12 @@ namespace PrintPressUnitTesting.DataController.Tools
 {
     public class MockDataController : DataController<MockDataController>
     {
-        private MockDatabaseScema _schema;
-        protected override MockDatabaseScema Tables { get { return _schema; } }
+        private MockDatabaseSchema _schema;
+        protected override MockDatabaseSchema Tables { get { return _schema; } }
 
         public override void Initialise()
         {
-            _schema = new MockDatabaseScema();
+            _schema = new MockDatabaseSchema();
             Initialise("MockCommercialData");
         }
 

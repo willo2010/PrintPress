@@ -29,17 +29,27 @@ namespace PrintPress.Controller
 {
     public class ClassifiedDataController : DataController<ClassifiedDataController>
     {
-        protected override ClassifiedTableSchema Tables { get { return new ClassifiedTableSchema(); } }
+        // Define the table schema type for the DataController specification
+        private ClassifiedDatabaseSchema _schema;
+        protected override ClassifiedDatabaseSchema Tables { get { return _schema; } }
 
+        /// <summary>
+        /// Initialises DataController for the Commercial Database
+        /// </summary>
         public override void Initialise()
         {
+            _schema = new ClassifiedDatabaseSchema();
             Initialise("ClassifiedData");
         }
 
-        protected override void VerifyAll()
-        {
-            VerifyTable(Tables.CredentialTable);
-        }
+        /// <summary>
+        /// Checks whether the provided credentials represent a valid employee account
+        /// </summary>
+        /// <param name="mailAddress"> Email address of the account to match </param>
+        /// <param name="password"> Password of the account to match </param>
+        /// <param name="message"> Out param of possible error message in case of read failure </param>
+        /// <param name="employee"> Out param of EmployeeData if match is successful </param>
+        /// <returns> Boolean value indicating whether the write operation was successful </returns>
         public bool ValidateCredentials(MailAddress mailAddress, string password, out string message, out EmployeeData employee)
         {
             message = "database error";
@@ -80,12 +90,23 @@ namespace PrintPress.Controller
             return Convert.ToBoolean(result);
         }
 
+        /// <summary>
+        /// NOT YET IMPLEMENTED - Placeholder function to encrypt input passwords
+        /// </summary>
+        /// <param name="password"> Raw password string to be encrypted </param>
+        /// <returns> Encrypted password string </returns>
         private string EncryptPassword(string password)
         {
             // IMPLEMENT
             return password;
         }
 
+        /// <summary>
+        /// Allocates and populates credentials to the database
+        /// </summary>
+        /// <param name="employee"> Employee data for credential storage </param>
+        /// <param name="password"> Encrypted password for credential storage </param>
+        /// <returns> Boolean value indicating whether the write operation was successful </returns>
         public bool AddCredentials(EmployeeData employee, string password)
         {
             CommercialDataController com = CommercialDataController.Instance;
@@ -107,14 +128,31 @@ using PrintPress.Data.Builder;
 
 namespace PrintPress.Controller
 {
+    /// <summary>
+    /// Commercial implementation of DataController singleton. Manages reading from and writing to the Commercial Database
+    /// </summary>
     public class CommercialDataController : DataController<CommercialDataController>
     {
-        protected override CommercialTableSchema Tables { get { return new CommercialTableSchema(); } }
+        // Define the table schema type for the DataController specification
+        private CommercialDatabaseSchema _schema;
+        protected override CommercialDatabaseSchema Tables { get { return _schema; } }
+
+        /// <summary>
+        /// Initialises DataController for the Commercial Database
+        /// </summary>
         public override void Initialise()
         {
+            _schema = new CommercialDatabaseSchema();
             Initialise("CommercialData");
         }
 
+        /// <summary>
+        /// Search the database for an employee matching the provided credentials
+        /// </summary>
+        /// <param name="mailAddress"> Employee email to search by as key </param>
+        /// <param name="employee"> Out param of resulting EmployeeData </param>
+        /// <param name="message"> Out param of possible error message in case of read failure </param>
+        /// <returns> CommandReturnState indicating success of query </returns>
         public CommandReturnState GetEmployee(MailAddress mailAddress, out EmployeeData employee, out string message)
         {
             employee = new EmployeeData();
@@ -150,6 +188,12 @@ namespace PrintPress.Controller
             return GetSingleResult(commandData, out employee);
         }
 
+        /// <summary>
+        /// Search the database for an Person matching the provided credentials
+        /// </summary>
+        /// <param name="id"> PersonalData id int to search by as key </param>
+        /// <param name="person"> Out param of resulting PersonalData </param>
+        /// <returns> CommandReturnState indicating success of query </returns>
         private CommandReturnState GetPerson(int id, out PersonalData person)
         {
             SqlCommandData<PersonalData> commandData = new SqlCommandData<PersonalData>()
@@ -174,6 +218,12 @@ namespace PrintPress.Controller
             return GetSingleResult(commandData, Tables.Person, out person);
         }
 
+        /// <summary>
+        /// Search the database for an Address matching the provided credentials
+        /// </summary>
+        /// <param name="id"> Address id int to search by as key </param>
+        /// <param name="address"> Out param of resulting Address object </param>
+        /// <returns> CommandReturnState indicating success of query </returns>
         private CommandReturnState GetAddress(int id, out Address address)
         {
             SqlCommandData<Address> commandData = new SqlCommandData<Address>()
@@ -197,6 +247,13 @@ namespace PrintPress.Controller
             return GetSingleResult(commandData, Tables.Address, out address);
         }
 
+        /// <summary>
+        /// Search the database for Adverts matching the provided credentials
+        /// </summary>
+        /// <param name="employeeID"> Employee id int to search by as key </param>
+        /// <param name="adverts"> Out param of resulting AdvertData[] </param>
+        /// <param name="message"> Out param of possible error message, useful in case of read failure </param>
+        /// <returns> CommandReturnState indicating success of query </returns>
         public CommandReturnState GetAdverts(int employeeID, out AdvertData[] adverts, out string message)
         {
             adverts = [];
@@ -245,6 +302,13 @@ namespace PrintPress.Controller
             return GetMultiResult(commandData, out adverts);
         }
 
+        /// <summary>
+        /// Search the database for Stories matching the provided credentials
+        /// </summary>
+        /// <param name="employeeID"> Employee id int to search by as key </param>
+        /// <param name="stories"> Out param of resulting StoryData[] </param>
+        /// <param name="message"> Out param of possible error message, useful in case of read failure </param>
+        /// <returns> CommandReturnState indicating success of query </returns>
         public CommandReturnState GetStories(int employeeID, out StoryData[] stories, out string message)
         {
             stories = [];
@@ -277,33 +341,45 @@ namespace PrintPress.Controller
             return GetMultiResult(commandData, out stories);
         }
 
-        public bool AddEmployee(EmployeeData employee, out int autoId)
+        /// <summary>
+        /// Allocates and populates an EmployeeData into the data tables
+        /// </summary>
+        /// <param name="employee"> Employee data to be stored </param>
+        /// <param name="autoID"> Out param giving the automatically assigned row ID </param>
+        /// <returns> Boolean value indicating whether the write operation was successful etrt56</returns>
+        public bool AddEmployee(EmployeeData employee, out int autoID)
         {
-            autoId = -1;
+            autoID = -1;
 
             bool commandSuccess = AddPerson(employee.personalData, out int personId);
             if (!commandSuccess) return commandSuccess;
 
             commandSuccess = AddItemGetId(Tables.Employee,
                 [personId.ToString(), employee.jobTitle],
-                out autoId);
+                out autoID);
 
             if (commandSuccess)
             {
-                AddClearance(autoId, employee.clearance);
+                AddClearance(autoID, employee.clearance);
             }
 
             return commandSuccess;
         }
 
-        private bool AddPerson(PersonalData person, out int autoId)
+        /// <summary>
+        /// Allocates and populates PersonalData into the data tables
+        /// </summary>
+        /// <param name="person"> Personal data to be stored </param>
+        /// <param name="autoID"> Out param giving the automatically assigned row ID </param>
+        /// <returns> Boolean value indicating whether the write operation was successful </returns>
+        private bool AddPerson(PersonalData person, out int autoID)
         {
-            autoId = -1;
+            autoID = -1;
 
-            switch (EmailExists(person.MailAddress, out int result))
+            switch (FindEmail(person.MailAddress, out int result))
             {
                 case CommandReturnState.FOUND:
-                    autoId = result;
+                    autoID = result;
                     return true;
                 case CommandReturnState.FAILED:
                     return false;
@@ -311,7 +387,7 @@ namespace PrintPress.Controller
                     break;
             }
 
-            bool commandSuccess = AddAddress(person.HomeAddress, out int addressId);
+            bool commandSuccess = AllocateAddress(person.HomeAddress, out int addressId);
             if (!commandSuccess)
             {
                 return commandSuccess;
@@ -319,22 +395,15 @@ namespace PrintPress.Controller
 
             return AddItemGetId(Tables.Person, 
                 [addressId.ToString(), person.FirstNames, person.LastName, person.MailAddress.Address, person.Phone],
-                out autoId);
+                out autoID);
         }
 
-        private bool AddAddress(Address? maybeAddress, out int autoId)
-        {
-            if (maybeAddress == null)
-            {
-                autoId = -1;
-                return true;
-            }
-            Address address = (Address)maybeAddress;
-            return AddItemGetId(Tables.Address,
-                [address.HouseNameOrNumber, address.Road, address.City, address.County, address.Country, address.Postcode],
-                out autoId);
-        }
-
+        /// <summary>
+        /// Allocates and populates a set of clearance, employee ID pairs into the Clearance table
+        /// </summary>
+        /// <param name="employeeID"> Associated employee ID int </param>
+        /// <param name="clearance"> Associated department clearances </param>
+        /// <returns> Boolean value indicating whether the write operation was successful </returns>
         private bool AddClearance(int employeeID, Department[] clearance)
         {
             bool failed = false;
@@ -349,6 +418,11 @@ namespace PrintPress.Controller
             return !failed;
         }
 
+        /// <summary>
+        /// Updates ContentData in the database tables
+        /// </summary>
+        /// <param name="content"> Associated content data </param>
+        /// <returns> Boolean value indicating whether the write operation was successful </returns>
         private bool UpdateContent(ContentData content)
         {
             SqlCommandData<object> commandData = new SqlCommandData<object>()
@@ -371,6 +445,11 @@ namespace PrintPress.Controller
 
         }
 
+        /// <summary>
+        /// Removes a content instance from the database
+        /// </summary>
+        /// <param name="contentID"> ID of content to be deleted </param>
+        /// <returns> Boolean value indicating whether the write operation was successful </returns>
         public bool DeleteContent(int contentID)
         {
             SqlCommandData<object> commandData = new SqlCommandData<object>()
@@ -390,6 +469,11 @@ namespace PrintPress.Controller
             return ExecuteNonQuery(commandData);
         }
 
+        /// <summary>
+        /// Updates an existing story instance on the database, identified by story ID
+        /// </summary>
+        /// <param name="storyData"> The updated StoryData instance </param>
+        /// <returns> Boolean value indicating whether the write operation was successful </returns>
         public bool UpdateStory(StoryData storyData)
         {
             if (!UpdateContent(storyData))
@@ -409,7 +493,32 @@ namespace PrintPress.Controller
             return ExecuteNonQuery(commandData);
         }
 
-        public bool AddContent(ContentData content, out int autoId)
+        /// <summary>
+        /// Allocates and populates an Address into the data tables
+        /// </summary>
+        /// <param name="maybeAddress"> Address data to be stored </param>
+        /// <param name="autoID"> Out param giving the automatically assigned row ID </param>
+        /// <returns> Boolean value indicating whether the write operation was successful </returns>
+        private bool AllocateAddress(Address? maybeAddress, out int autoID)
+        {
+            if (maybeAddress == null)
+            {
+                autoID = -1;
+                return true;
+            }
+            Address address = (Address)maybeAddress;
+            return AddItemGetId(Tables.Address,
+                [address.HouseNameOrNumber, address.Road, address.City, address.County, address.Country, address.Postcode],
+                out autoID);
+        }
+
+        /// <summary>
+        /// Allocates and populates a Content instance in the data tables
+        /// </summary>
+        /// <param name="content"> Content instance to be stored </param>
+        /// <param name="autoId"> Out param giving the automatically assigned row ID </param>
+        /// <returns> Boolean value indicating whether the write operation was successful </returns>
+        public bool AllocateContent(ContentData content, out int autoId)
         {
             autoId = -1;
             
@@ -417,7 +526,6 @@ namespace PrintPress.Controller
                 [content.Assigned.Id.ToString(), content.Text, content.Title, DataTools.ImageToByteArray(content.Image), 
                 content.Notes, content.Comments, ((int)content.State).ToString(), DateTime.Now],
                 out int itemAutoId);
-
             if (success)
             {
                 autoId = itemAutoId;
@@ -426,15 +534,21 @@ namespace PrintPress.Controller
             return false;
         }
 
-        public bool AllocateStory(int employeeId, out int autoId)
+        /// <summary>
+        /// Allocates and populates a Story instance in the data tables
+        /// </summary>
+        /// <param name="employeeID"> ID of the story's assigned employee </param>
+        /// <param name="autoId"> Out param giving the automatically assigned row ID </param>
+        /// <returns> Boolean value indicating whether the write operation was successful </returns>
+        public bool AllocateStory(int employeeID, out int autoId)
         {
             autoId = -1;
 
             StoryBuilder builder = new StoryBuilder();
-            builder.Assigned = new EmployeeData(employeeId);
+            builder.Assigned = new EmployeeData(employeeID);
             StoryData story = builder.ToStoryData();
 
-            if (!AddContent(story, out autoId))
+            if (!AllocateContent(story, out autoId))
             {
                 return false;
             }
@@ -442,6 +556,12 @@ namespace PrintPress.Controller
                 [autoId, story.Sources]);
         }
 
+        /// <summary>
+        /// Allocates and populates a Advert instance in the data tables
+        /// </summary>
+        /// <param name="employeeID"> ID of the advert's assigned employee </param>
+        /// <param name="autoId"> Out param giving the automatically assigned row ID </param>
+        /// <returns> Boolean value indicating whether the write operation was successful </returns>
         public bool AllocateAdvert(int employeeID, out int autoId)
         {
             autoId = -1;
@@ -450,7 +570,7 @@ namespace PrintPress.Controller
             builder.Assigned = new EmployeeData(employeeID);
             AdvertData advert = builder.ToAdvertData();
 
-            if (!AddContent(advert, out int contentAutoId))
+            if (!AllocateContent(advert, out int contentAutoId))
             {
                 return false;
             }
@@ -463,12 +583,18 @@ namespace PrintPress.Controller
                 out autoId);
         }
 
-        private CommandReturnState EmailExists(MailAddress email, out int id)
+        /// <summary>
+        /// Finds the PersonID for a given email from the Commercial database
+        /// </summary>
+        /// <param name="email"> The email address to check against </param>
+        /// <param name="id"> Out param giving the PersonID value, if found </param>
+        /// <returns> CommandReturnState indicating whether the email has been found </returns>
+        private CommandReturnState FindEmail(MailAddress email, out int id)
         {
             id = -1;
             SqlCommandData<int> query = new SqlCommandData<int>(
                 $"SELECT PersonID FROM {Tables.Person.Name} WHERE Email = @email",
-                [new SqlParameter("@email", SqlDbType.VarChar) { Value = email }],
+                [new SqlParameter("@email", SqlDbType.VarChar) { Value = email.ToString() }],
                 reader => reader.GetInt32(0));
 
             CommandReturnState crs = GetSingleResult(query, out int result);
@@ -479,13 +605,19 @@ namespace PrintPress.Controller
             return crs;
         }
 
-        private bool GetClearance(int id, out Department[] clearance)
+        /// <summary>
+        /// Reads all clearance instances for the given EmployeeID into an array
+        /// </summary>
+        /// <param name="employeeID"> The employee ID to match against </param>
+        /// <param name="clearance"> Our param of the Departments cleared for the matched ID </param>
+        /// <returns> Boolean value indicating whether the write operation was successful </returns>
+        private bool GetClearance(int employeeID, out Department[] clearance)
         {
             SqlCommandData<Department> commandData = new SqlCommandData<Department>()
             {
                 queryString = $"SELECT DepartmentID FROM {Tables.Clearance.Name} " +
                 $"WHERE {Tables.Clearance.Name}.EmployeeID = @employeeID",
-                sqlParams = [new SqlParameter("@employeeID", SqlDbType.Int) { Value = id }],
+                sqlParams = [new SqlParameter("@employeeID", SqlDbType.Int) { Value = employeeID }],
                 readerFunc = reader =>
                 {
                     return DataTools.DepartmentFromID(reader.GetInt32(0));
@@ -500,17 +632,6 @@ namespace PrintPress.Controller
 
             return false;
         }
-
-        protected override void VerifyAll()
-        {
-            VerifyTable(Tables.Employee);
-            VerifyTable(Tables.Person);
-            VerifyTable(Tables.Address);
-            VerifyTable(Tables.Clearance);
-            VerifyTable(Tables.Content);
-            VerifyTable(Tables.Story);
-            VerifyTable(Tables.Advert);
-        }
     }
 }
 using Microsoft.Data.SqlClient;
@@ -522,15 +643,23 @@ using System.Text;
 
 namespace PrintPress.Controller
 {
+    /// <summary>
+    /// Abstract Singleton base class, containing generic methods to interact with all PrintPress databases
+    /// </summary>
+    /// <typeparam name="T1"> DataController specification type, used to define singleton instance type </typeparam>
     public abstract class DataController<T1>
         where T1 : DataController<T1>, new()
     {
         #region Singleton implementation
 
         protected static bool _initialised = false;
-        private static T1? _instance;
-        protected abstract object Tables { get; }
+        protected static T1? _instance;
 
+        protected abstract IDatabaseSchema Tables { get; }
+
+        /// <summary>
+        /// Gets the singleton instance of the data controller.
+        /// </summary>
         public static T1 Instance
         {
             get
@@ -543,7 +672,15 @@ namespace PrintPress.Controller
             }
         }
 
+        /// <summary>
+        /// Abstract method to initialize the data controller, implemented in derived classes.
+        /// </summary>
         public abstract void Initialise();
+
+        /// <summary>
+        /// Initializes the data controller with a specified class name and sets up the database connection.
+        /// </summary>
+        /// <param name="className">The name of the class to initialize.</param>
         protected void Initialise(string className)
         {
             _className = className;
@@ -556,11 +693,14 @@ namespace PrintPress.Controller
         #endregion
         #region Abstract database functionality
 
-        private const string connectionStringBase = "Server=MAINFRAME\\SQLEXPRESS;Integrated security=SSPI;Encrypt=False;TrustServerCertificate=True";
-        protected SqlConnectionStringBuilder _defaultConnectionBuilder = new SqlConnectionStringBuilder(connectionStringBase);
+        private const string _connectionStringBase = "Server=MAINFRAME\\SQLEXPRESS;Integrated security=SSPI;Encrypt=False;TrustServerCertificate=True";
+        private const string _rootPath = "C:\\Program Files\\PrintPress\\";
+        protected SqlConnectionStringBuilder _defaultConnectionBuilder = new SqlConnectionStringBuilder(_connectionStringBase);
         private string _className = string.Empty;
-        private string rootPath = "C:\\Program Files\\PrintPress\\";
 
+        /// <summary>
+        /// Gets the name of the database associated with this controller.
+        /// </summary>
         private string DatabaseName
         {
             get
@@ -568,19 +708,38 @@ namespace PrintPress.Controller
                 return _className + "DB";
             }
         }
-        private string DatabasePath 
-        { 
+
+        /// <summary>
+        /// Gets the file path for the database.
+        /// </summary>
+        private string DatabasePath
+        {
             get
             {
-                return @$"{rootPath}{DatabaseName}Data.mdf";
+                return @$"{_rootPath}{DatabaseName}Data.mdf";
             }
         }
 
+        /// <summary>
+        /// Executes a non-query SQL command on the database.
+        /// </summary>
+        /// <typeparam name="C">The type of the command result.</typeparam>
+        /// <param name="nonQuery">The SQL command data to execute.</param>
+        /// <param name="overrideDb">Optional override database name.</param>
+        /// <returns>True if the command executed successfully, otherwise false.</returns>
         protected virtual bool ExecuteNonQuery<C>(SqlCommandData<C> nonQuery, string? overrideDb = null)
         {
             return Execute(nonQuery, out _, command => { command.ExecuteNonQuery(); return []; }, overrideDb);
         }
 
+        /// <summary>
+        /// Executes a query on the database and retrieves the results.
+        /// </summary>
+        /// <typeparam name="C">The type of the query result.</typeparam>
+        /// <param name="query">The SQL command data to execute.</param>
+        /// <param name="values">The results of the query.</param>
+        /// <param name="overrideDb">Optional override database name.</param>
+        /// <returns>True if the query executed successfully, otherwise false.</returns>
         protected bool ExecuteQuery<C>(SqlCommandData<C> query, out C[] values, string? overrideDb = null)
         {
             return Execute(query, out values,
@@ -599,6 +758,15 @@ namespace PrintPress.Controller
                 overrideDb);
         }
 
+        /// <summary>
+        /// Executes a SQL command on the database.
+        /// </summary>
+        /// <typeparam name="C">The type of the command result.</typeparam>
+        /// <param name="query">The SQL command data to execute.</param>
+        /// <param name="values">The results of the command.</param>
+        /// <param name="executeFunc">The function to execute with the SQL command.</param>
+        /// <param name="overrideDb">Optional override database name.</param>
+        /// <returns>True if the command executed successfully, otherwise false.</returns>
         private bool Execute<C>(SqlCommandData<C> query, out C[] values, Func<SqlCommand, C[]> executeFunc, string? overrideDb = null)
         {
             values = [];
@@ -628,35 +796,48 @@ namespace PrintPress.Controller
             }
         }
 
+        /// <summary>
+        /// Retrieves a database connection string builder, optionally overriding the database name.
+        /// </summary>
+        /// <param name="overrideDb">Optional override database name.</param>
+        /// <returns>A SQL connection string builder.</returns>
         private SqlConnectionStringBuilder GetConnectionBuilder(string? overrideDb = null)
         {
             SqlConnectionStringBuilder localConnectionBuilder = _defaultConnectionBuilder;
             if (overrideDb != null)
             {
-                localConnectionBuilder = new SqlConnectionStringBuilder(connectionStringBase);
+                localConnectionBuilder = new SqlConnectionStringBuilder(_connectionStringBase);
                 localConnectionBuilder.InitialCatalog = overrideDb;
             }
             return localConnectionBuilder;
         }
 
+        /// <summary>
+        /// Verifies the existence of the database and creates it if it does not exist.
+        /// </summary>
+        /// <returns>True if the database exists or was created successfully, otherwise false.</returns>
         protected bool VerifyDatabase()
         {
             string dbName = _defaultConnectionBuilder.InitialCatalog;
-            
+
             if (DatabaseExists()) return true;
             if (TryCreateDatabase()) return true;
 
             return false;
         }
 
+        /// <summary>
+        /// Checks if the database exists on the server.
+        /// </summary>
+        /// <returns>True if the database exists, otherwise false.</returns>
         private bool DatabaseExists()
         {
             SqlCommandData<int> commandData = new SqlCommandData<int>()
             {
                 queryString = $"IF EXISTS" +
-                $"(SELECT 1 FROM sys.databases WHERE name = @databaseName AND state_desc = 'ONLINE') " +
-                $"BEGIN SELECT 1 END " +
-                $"ELSE BEGIN SELECT 0 END",
+                "(SELECT 1 FROM sys.databases WHERE name = @databaseName AND state_desc = 'ONLINE') " +
+                "BEGIN SELECT 1 END " +
+                "ELSE BEGIN SELECT 0 END",
                 sqlParams = [new SqlParameter("@databaseName", SqlDbType.NVarChar) { Value = DatabaseName }],
                 readerFunc = reader => reader.GetInt32(0)
             };
@@ -669,6 +850,10 @@ namespace PrintPress.Controller
             return Convert.ToBoolean(result);
         }
 
+        /// <summary>
+        /// Attempts to create the database if it does not exist.
+        /// </summary>
+        /// <returns>True if the database was created successfully, otherwise false.</returns>
         private bool TryCreateDatabase()
         {
             // SQL to drop and recreate the database
@@ -692,7 +877,7 @@ namespace PrintPress.Controller
                 LOG ON 
                 (
                     NAME = '{_className}{"_DBLog"}',
-                    FILENAME = '{rootPath}{_className}{"_DBLog.ldf"}',
+                    FILENAME = '{_rootPath}{_className}{"_DBLog.ldf"}',
                     SIZE = 1MB, MAXSIZE = 5MB, FILEGROWTH = 10%
                 )";
 
@@ -706,7 +891,23 @@ namespace PrintPress.Controller
             // Execute the SQL command
             return ExecuteNonQuery(nonQueryData, "master");
         }
-        protected abstract void VerifyAll();
+
+        /// <summary>
+        /// Verifies all tables defined in the database schema.
+        /// </summary>
+        private void VerifyAll()
+        {
+            foreach (TableSchema table in Tables.AllTables)
+            {
+                VerifyTable(table);
+            }
+        }
+
+        /// <summary>
+        /// Verifies the existence of a specific table in the database.
+        /// </summary>
+        /// <param name="schema">The schema of the table to verify.</param>
+        /// <returns>True if the table exists or was created successfully, otherwise false.</returns>
         protected bool VerifyTable(TableSchema schema)
         {
             SqlCommandData<int> query = new SqlCommandData<int>()
@@ -736,10 +937,17 @@ namespace PrintPress.Controller
             {
                 return true;
             }
-              
+
             return false;
         }
 
+        /// <summary>
+        /// Adds an item to a table and retrieves the auto-generated ID of the new row.
+        /// </summary>
+        /// <param name="schema">The schema of the table to add the item to.</param>
+        /// <param name="values">The values to insert into the table.</param>
+        /// <param name="autoId">The auto-generated ID of the new row.</param>
+        /// <returns>True if the item was added successfully, otherwise false.</returns>
         protected bool AddItemGetId(TableSchema schema, object[] values, out int autoId)
         {
             int itemCount = values.Length;
@@ -765,6 +973,12 @@ namespace PrintPress.Controller
             return false;
         }
 
+        /// <summary>
+        /// Adds an item to a table.
+        /// </summary>
+        /// <param name="schema">The schema of the table to add the item to.</param>
+        /// <param name="values">The values to insert into the table.</param>
+        /// <returns>True if the item was added successfully, otherwise false.</returns>
         protected bool AddItem(TableSchema schema, object[] values)
         {
             int itemCount = schema.Columns.Length;
@@ -785,6 +999,12 @@ namespace PrintPress.Controller
             return ExecuteNonQuery(commandData);
         }
 
+        /// <summary>
+        /// Deletes an item from a table.
+        /// </summary>
+        /// <param name="schema">The schema of the table to delete the item from.</param>
+        /// <param name="values">The values identifying the row to delete.</param>
+        /// <returns>True if the item was deleted successfully, otherwise false.</returns>
         protected bool DeleteItem(TableSchema schema, string[] values)
         {
             int itemCount = schema.Columns.Length;
@@ -805,6 +1025,14 @@ namespace PrintPress.Controller
             return ExecuteNonQuery(commandData);
         }
 
+        /// <summary>
+        /// Retrieves a single result from a query, verifying the associated table if necessary.
+        /// </summary>
+        /// <typeparam name="C">The type of the query result.</typeparam>
+        /// <param name="commandData">The query data to execute.</param>
+        /// <param name="tableSchema">The schema of the table to verify.</param>
+        /// <param name="result">The result of the query.</param>
+        /// <returns>A CommandReturnState indicating the result of the query.</returns>
         protected CommandReturnState GetSingleResult<C>(SqlCommandData<C> commandData, TableSchema tableSchema, out C result) where C : new()
         {
             result = new C();
@@ -817,6 +1045,13 @@ namespace PrintPress.Controller
             return GetSingleResult(commandData, out result);
         }
 
+        /// <summary>
+        /// Retrieves a single result from a query.
+        /// </summary>
+        /// <typeparam name="C">The type of the query result.</typeparam>
+        /// <param name="commandData">The query data to execute.</param>
+        /// <param name="result">The result of the query.</param>
+        /// <returns>A CommandReturnState indicating the result of the query.</returns>
         protected CommandReturnState GetSingleResult<C>(SqlCommandData<C> commandData, out C result)
         {
             result = default;
@@ -836,6 +1071,14 @@ namespace PrintPress.Controller
             return CommandReturnState.FOUND;
         }
 
+        /// <summary>
+        /// Retrieves multiple results from a query, verifying the associated table if necessary.
+        /// </summary>
+        /// <typeparam name="C">The type of the query result.</typeparam>
+        /// <param name="commandData">The query data to execute.</param>
+        /// <param name="tableSchema">The schema of the table to verify.</param>
+        /// <param name="results">The results of the query.</param>
+        /// <returns>A CommandReturnState indicating the result of the query.</returns>
         protected CommandReturnState GetMultiResult<C>(SqlCommandData<C> commandData, TableSchema tableSchema, out C[] results)
         {
             if (!VerifyTable(tableSchema))
@@ -846,7 +1089,14 @@ namespace PrintPress.Controller
 
             return GetMultiResult(commandData, out results);
         }
-        protected CommandReturnState GetMultiResult<C>(SqlCommandData<C> commandData,  out C[] results)
+        /// <summary>
+        /// Executes a query that returns multiple results and categorizes the outcome as FOUND, NOTFOUND, or FAILED.
+        /// </summary>
+        /// <typeparam name="C">Type of the expected result data.</typeparam>
+        /// <param name="commandData">The query command data to execute.</param>
+        /// <param name="results">The resulting data array if the query succeeds.</param>
+        /// <returns>A CommandReturnState indicating the query result.</returns>
+        protected CommandReturnState GetMultiResult<C>(SqlCommandData<C> commandData, out C[] results)
         {
             bool readSuccess = ExecuteQuery(commandData, out results);
 
@@ -861,6 +1111,11 @@ namespace PrintPress.Controller
             return CommandReturnState.FOUND;
         }
 
+        /// <summary>
+        /// Executes a SQL query and returns the resulting data as a DataTable object.
+        /// </summary>
+        /// <param name="sqlCommand">The SQL query string to execute.</param>
+        /// <returns>A DataTable containing the query result set.</returns>
         public DataTable GetData(string sqlCommand)
         {
             SqlConnection connection = new SqlConnection(_defaultConnectionBuilder.ConnectionString);
@@ -876,12 +1131,19 @@ namespace PrintPress.Controller
             return table;
         }
 
+        /// <summary>
+        /// Executes a raw SQL command and returns the results as a single concatenated string.
+        /// </summary>
+        /// <param name="sqlString">The raw SQL command to execute.</param>
+        /// <param name="result">A string containing the concatenated results.</param>
+        /// <returns>A CommandReturnState indicating whether the command succeeded, failed, or found no results.</returns>
         public CommandReturnState SendSql(string sqlString, out string result)
         {
             SqlCommandData<string> commandData = new SqlCommandData<string>(
                 sqlString,
                 [],
-                reader => {
+                reader =>
+                {
                     StringBuilder sb = new StringBuilder();
 
                     for (int i = 0; i < reader.FieldCount; i++)
@@ -894,7 +1156,6 @@ namespace PrintPress.Controller
                             case "nvarchar":
                                 sb.Append(reader.GetString(i));
                                 break;
-
                         }
                         sb.Append(", ");
                     }
@@ -923,15 +1184,38 @@ namespace PrintPress.Controller
             result = resultBuilder.ToString();
             return CommandReturnState.FOUND;
         }
+
         #endregion
     }
 }
 namespace PrintPress.Controller.Data
 {
-    public class ClassifiedTableSchema
+    /// <summary>
+    /// Represents the database schema for the Classified Data Controller.
+    /// Provides access to the table schemas defined within the classified database.
+    /// </summary>
+    public class ClassifiedDatabaseSchema : IDatabaseSchema
     {
+        /// <summary>
+        /// Gets all the table schemas defined in the classified database.
+        /// </summary>
+        public TableSchema[] AllTables
+        {
+            get
+            {
+                return [CredentialTable];
+            }
+        }
+
+        /// <summary>
+        /// Gets the schema for the "CREDENTIAL" table, used for storing employee credentials.
+        /// </summary>
         public TableSchema CredentialTable { get { return credentialTable; } }
 
+        /// <summary>
+        /// Static schema definition for the "CREDENTIAL" table.
+        /// Contains columns for EmployeeID and EncPassword.
+        /// </summary>
         private static readonly TableSchema credentialTable = new TableSchema(
             "CREDENTIAL",
             [
@@ -950,20 +1234,77 @@ namespace PrintPress.Controller.Data
         public SqlDbType type;
     }
 }
-using System.Data;
-
 namespace PrintPress.Controller.Data
 {
-    public class CommercialTableSchema
+    /// <summary>
+    /// Represents the database schema for the Commercial Data Controller.
+    /// Defines table schemas required for managing employee, content, and related data.
+    /// </summary>
+    public class CommercialDatabaseSchema : IDatabaseSchema
     {
+        #region Properties
+
+        /// <summary>
+        /// Gets all the table schemas defined in the commercial database.
+        /// </summary>
+        public TableSchema[] AllTables
+        {
+            get
+            {
+                return [
+                    Employee,
+                    Person,
+                    Address,
+                    Clearance,
+                    Content,
+                    Story,
+                    Advert
+                ];
+            }
+        }
+
+        /// <summary>
+        /// Gets the schema for the "EMPLOYEE" table, used for storing employee information.
+        /// </summary>
         public TableSchema Employee { get { return employeeTable; } }
+
+        /// <summary>
+        /// Gets the schema for the "PERSONALDATA" table, used for storing personal details.
+        /// </summary>
         public TableSchema Person { get { return personTable; } }
+
+        /// <summary>
+        /// Gets the schema for the "ADDRESS" table, used for storing address details.
+        /// </summary>
         public TableSchema Address { get { return addressTable; } }
+
+        /// <summary>
+        /// Gets the schema for the "CLEARANCE" table, used for managing employee clearances.
+        /// </summary>
         public TableSchema Clearance { get { return clearanceTable; } }
+
+        /// <summary>
+        /// Gets the schema for the "CONTENT" table, used for storing general content information.
+        /// </summary>
         public TableSchema Content { get { return contentTable; } }
+
+        /// <summary>
+        /// Gets the schema for the "STORY" table, used for storing story-specific content.
+        /// </summary>
         public TableSchema Story { get { return storyTable; } }
+
+        /// <summary>
+        /// Gets the schema for the "ADVERT" table, used for storing advert-specific content.
+        /// </summary>
         public TableSchema Advert { get { return advertTable; } }
 
+        #endregion
+
+        #region Static Table Definitions
+
+        /// <summary>
+        /// Defines the schema for the "EMPLOYEE" table.
+        /// </summary>
         private static readonly TableSchema employeeTable = new TableSchema(
             "EMPLOYEE",
             [
@@ -972,6 +1313,9 @@ namespace PrintPress.Controller.Data
                 ["JobTitle", "NVARCHAR(20) NOT NULL"]
             ]);
 
+        /// <summary>
+        /// Defines the schema for the "PERSONALDATA" table.
+        /// </summary>
         private static readonly TableSchema personTable = new TableSchema(
             "PERSONALDATA",
             [
@@ -983,6 +1327,9 @@ namespace PrintPress.Controller.Data
                 ["PhoneNum", "NVARCHAR(20)"]
             ]);
 
+        /// <summary>
+        /// Defines the schema for the "ADDRESS" table.
+        /// </summary>
         public static readonly TableSchema addressTable = new TableSchema(
             "ADDRESS",
             [
@@ -995,6 +1342,9 @@ namespace PrintPress.Controller.Data
                 ["Postcode", "NVARCHAR(30) NOT NULL"]
             ]);
 
+        /// <summary>
+        /// Defines the schema for the "CLEARANCE" table.
+        /// </summary>
         public static readonly TableSchema clearanceTable = new TableSchema(
             "CLEARANCE",
             [
@@ -1002,6 +1352,9 @@ namespace PrintPress.Controller.Data
                 ["DepartmentID", "INT NOT NULL"]
             ]);
 
+        /// <summary>
+        /// Defines the schema for the "CONTENT" table.
+        /// </summary>
         private static readonly TableSchema contentTable = new TableSchema(
             "CONTENT",
             [
@@ -1016,6 +1369,9 @@ namespace PrintPress.Controller.Data
                 ["LastSaved", "DATETIME NOT NULL"]
             ]);
 
+        /// <summary>
+        /// Defines the schema for the "STORY" table.
+        /// </summary>
         private static readonly TableSchema storyTable = new TableSchema(
            "STORY",
            [
@@ -1023,18 +1379,20 @@ namespace PrintPress.Controller.Data
                 ["Source", "VARCHAR(100) NOT NULL"]
            ]);
 
+        /// <summary>
+        /// Defines the schema for the "ADVERT" table.
+        /// </summary>
         private static readonly TableSchema advertTable = new TableSchema(
             "ADVERT",
             [
                 ["ContentID", "INT PRIMARY KEY"],
                 ["ContactID", "INT NOT NULL"]
             ]);
+
+        #endregion
     }
 }
-using Microsoft.Data.SqlClient;
-using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using PrintPress.Data.Enum;
-using System.Data;
 using System.Text;
 
 namespace PrintPress.Controller.Data
@@ -1182,6 +1540,26 @@ namespace PrintPress.Controller.Data
         }
     }
 }
+using System;
+
+namespace PrintPress.Controller.Data
+{
+    /// <summary>
+    /// Represents the interface for database schemas in the PrintPress application.
+    /// All implementing classes must provide access to an array of table schemas.
+    /// </summary>
+    public interface IDatabaseSchema
+    {
+        #region Properties
+
+        /// <summary>
+        /// Gets an array of all table schemas defined in the database schema.
+        /// </summary>
+        public TableSchema[] AllTables { get; }
+
+        #endregion
+    }
+}
 using Microsoft.Data.SqlClient;
 
 namespace PrintPress.Controller.Data
@@ -1285,11 +1663,22 @@ using PrintPress.Data.Enum;
 
 namespace PrintPress.Data
 {
+    /// <summary>
+    /// Abstract base class representing shared properties and functionality for content data such as stories and adverts.
+    /// </summary>
     public abstract class ContentData : Data
     {
+        #region Properties
+
+        /// <summary>
+        /// Gets the unique identifier for the content.
+        /// </summary>
         public int ContentID { get; init; } = -1;
 
-        protected EmployeeData _assigned = new EmployeeData();
+        private EmployeeData _assigned = new EmployeeData();
+        /// <summary>
+        /// Gets or sets the employee assigned to the content. Triggers the OnDataChanged event when updated.
+        /// </summary>
         public EmployeeData Assigned
         {
             get { return _assigned; }
@@ -1300,7 +1689,10 @@ namespace PrintPress.Data
             }
         }
 
-        protected string _text = string.Empty;
+        private string _text = string.Empty;
+        /// <summary>
+        /// Gets or sets the main textual content. Triggers the OnDataChanged event when updated.
+        /// </summary>
         public string Text
         {
             get { return _text; }
@@ -1311,7 +1703,10 @@ namespace PrintPress.Data
             }
         }
 
-        protected string _title = string.Empty;
+        private string _title = string.Empty;
+        /// <summary>
+        /// Gets or sets the title of the content. Triggers the OnDataChanged event when updated.
+        /// </summary>
         public string Title
         {
             get { return _title; }
@@ -1322,7 +1717,10 @@ namespace PrintPress.Data
             }
         }
 
-        protected Image? _image = null;
+        private Image? _image = null;
+        /// <summary>
+        /// Gets or sets the associated image for the content. Triggers the OnDataChanged event when updated.
+        /// </summary>
         public Image? Image
         {
             get { return _image; }
@@ -1333,7 +1731,10 @@ namespace PrintPress.Data
             }
         }
 
-        protected string _notes = string.Empty;
+        private string _notes = string.Empty;
+        /// <summary>
+        /// Gets or sets additional notes for the content. Triggers the OnDataChanged event when updated.
+        /// </summary>
         public string Notes
         {
             get { return _notes; }
@@ -1344,7 +1745,10 @@ namespace PrintPress.Data
             }
         }
 
-        protected string _comments = string.Empty;
+        private string _comments = string.Empty;
+        /// <summary>
+        /// Gets or sets comments on the content. Triggers the OnDataChanged event when updated.
+        /// </summary>
         public string Comments
         {
             get { return _comments; }
@@ -1355,7 +1759,10 @@ namespace PrintPress.Data
             }
         }
 
-        protected ContentState _state = ContentState.IN_PROGRESS;
+        private ContentState _state = ContentState.IN_PROGRESS;
+        /// <summary>
+        /// Gets or sets the current state of the content. Triggers the OnDataChanged event when updated.
+        /// </summary>
         public ContentState State
         {
             get { return _state; }
@@ -1365,18 +1772,19 @@ namespace PrintPress.Data
                 OnDataChanged();
             }
         }
+
+        /// <summary>
+        /// Gets or sets the last saved timestamp for the content.
+        /// </summary>
         public DateTime LastSaved { get; set; }
-        public ContentData()
-        {
-            LastSaved = DateTime.Now;
-        }
+
         private bool _localChanges = false;
+        /// <summary>
+        /// Gets or sets a value indicating whether there are unsaved changes locally. Triggers the SaveStateChanged event when updated.
+        /// </summary>
         public bool LocalChanges
         {
-            get
-            {
-                return _localChanges;
-            }
+            get { return _localChanges; }
             set
             {
                 _localChanges = value;
@@ -1384,6 +1792,30 @@ namespace PrintPress.Data
             }
         }
 
+        #endregion
+
+        #region Constructors
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ContentData"/> class with default values.
+        /// </summary>
+        public ContentData()
+        {
+            LastSaved = DateTime.Now;
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ContentData"/> class with specified values.
+        /// </summary>
+        /// <param name="id">The unique identifier for the content.</param>
+        /// <param name="assigned">The employee assigned to the content.</param>
+        /// <param name="text">The textual content.</param>
+        /// <param name="title">The title of the content.</param>
+        /// <param name="image">The associated image.</param>
+        /// <param name="notes">Additional notes for the content.</param>
+        /// <param name="comments">Comments on the content.</param>
+        /// <param name="state">The current state of the content.</param>
+        /// <param name="lastSaved">The last saved timestamp.</param>
         public ContentData(int id, EmployeeData assigned, string text, string title, Image? image, string notes, string comments, ContentState state, DateTime lastSaved)
         {
             ContentID = id;
@@ -1399,16 +1831,38 @@ namespace PrintPress.Data
             DataChanged += SetLocalChangesTrue;
         }
 
+        #endregion
+
+        #region Events
+
+        /// <summary>
+        /// Event triggered when the save state changes (e.g., local changes are made).
+        /// </summary>
+        public event EventHandler<EventArgs>? SaveStateChanged;
+
+        #endregion
+
+        #region Private Methods
+
+        /// <summary>
+        /// Sets the LocalChanges property to true when data changes.
+        /// </summary>
+        /// <param name="sender">The event sender.</param>
+        /// <param name="e">The event arguments.</param>
         private void SetLocalChangesTrue(object? sender, EventArgs e)
         {
             LocalChanges = true;
         }
 
-        public event EventHandler<EventArgs>? SaveStateChanged;
+        /// <summary>
+        /// Triggers the SaveStateChanged event when LocalChanges is updated.
+        /// </summary>
         protected virtual void OnLocalChangesChanged()
         {
             SaveStateChanged?.Invoke(this, new EventArgs());
         }
+
+        #endregion
     }
 }
 namespace PrintPress.Data
@@ -1574,9 +2028,24 @@ using PrintPress.Data.Enum;
 
 namespace PrintPress.Data
 {
+    /// <summary>
+    /// Represents a story in the PrintPress application, inheriting from ContentData.
+    /// Contains specific properties and behaviors for managing story data, including sources.
+    /// </summary>
     public class StoryData : ContentData
     {
+        #region Private Fields
+
         private string _source = string.Empty;
+
+        #endregion
+
+        #region Properties
+
+        /// <summary>
+        /// Gets or sets the source information for the story.
+        /// When set, triggers the SourceChanged event.
+        /// </summary>
         public string Sources
         {
             get
@@ -1590,9 +2059,28 @@ namespace PrintPress.Data
             }
         }
 
-        public StoryData(int id,
+        #endregion
+
+        #region Constructors
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StoryData"/> class.
+        /// </summary>
+        /// <param name="id">The unique identifier for the story.</param>
+        /// <param name="assigned">The employee assigned to the story.</param>
+        /// <param name="text">The main text of the story.</param>
+        /// <param name="title">The title of the story.</param>
+        /// <param name="image">An optional image associated with the story.</param>
+        /// <param name="notes">Notes related to the story.</param>
+        /// <param name="comments">Comments related to the story.</param>
+        /// <param name="state">The current state of the story (e.g., in progress, published).</param>
+        /// <param name="lastSaved">The last saved timestamp for the story.</param>
+        /// <param name="source">The source information for the story.</param>
+        public StoryData(
+            int id,
             EmployeeData assigned,
-            string text, string title,
+            string text,
+            string title,
             Image? image,
             string notes,
             string comments,
@@ -1605,15 +2093,38 @@ namespace PrintPress.Data
             SourceChanged += OnDataChanged;
         }
 
+        #endregion
+
+        #region Events
+
+        /// <summary>
+        /// Event triggered when the source information is updated.
+        /// </summary>
         public event EventHandler<EventArgs>? SourceChanged;
+
+        #endregion
+
+        #region Protected Methods
+
+        /// <summary>
+        /// Invokes the SourceChanged event.
+        /// </summary>
         protected virtual void OnSourceChanged()
         {
             SourceChanged?.Invoke(this, new EventArgs());
         }
+
+        /// <summary>
+        /// Handles the SourceChanged event and invokes any subscribed handlers.
+        /// </summary>
+        /// <param name="sender">The object that triggered the event.</param>
+        /// <param name="e">Event data.</param>
         protected virtual void OnSourceChanged(object? sender, EventArgs e)
         {
             SourceChanged?.Invoke(sender, e);
         }
+
+        #endregion
     }
 }
 namespace PrintPress.Data.Builder
@@ -1778,7 +2289,46 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("PrintPress")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+bfbf36da9bc363758c87b0b7165ef3fe63a8128c")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+a7f0d7ef013b55ccafffb7e62dd6cf907825096a")]
+[assembly: System.Reflection.AssemblyProductAttribute("PrintPress")]
+[assembly: System.Reflection.AssemblyTitleAttribute("PrintPress")]
+[assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
+[assembly: System.Runtime.Versioning.TargetPlatformAttribute("Windows7.0")]
+[assembly: System.Runtime.Versioning.SupportedOSPlatformAttribute("Windows7.0")]
+
+// Generated by the MSBuild WriteCodeFragment class.
+
+// <auto-generated/>
+global using global::System;
+global using global::System.Collections.Generic;
+global using global::System.Drawing;
+global using global::System.IO;
+global using global::System.Linq;
+global using global::System.Net.Http;
+global using global::System.Threading;
+global using global::System.Threading.Tasks;
+global using global::System.Windows.Forms;
+// <autogenerated />
+using System;
+using System.Reflection;
+[assembly: global::System.Runtime.Versioning.TargetFrameworkAttribute(".NETCoreApp,Version=v8.0", FrameworkDisplayName = ".NET 8.0")]
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by a tool.
+//     Runtime Version:4.0.30319.42000
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+using System;
+using System.Reflection;
+
+[assembly: System.Reflection.AssemblyCompanyAttribute("PrintPress")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+86bfc5daf4f52543286b17d790ab53c7ae5c334f")]
 [assembly: System.Reflection.AssemblyProductAttribute("PrintPress")]
 [assembly: System.Reflection.AssemblyTitleAttribute("PrintPress")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
@@ -1865,21 +2415,59 @@ using PrintPress.UIService.Abstract;
 
 namespace PrintPress.UICommand
 {
-    internal abstract class Command<T> where T : ClientService<T>
+    /// <summary>
+    /// Abstract base class representing a generic command in the PrintPress application.
+    /// Provides execution and undo functionality with support for maintaining command history.
+    /// </summary>
+    /// <typeparam name="T">Type of the client service associated with the command.</typeparam>
+    public abstract class Command<T> where T : ClientService<T>
     {
-        // Abstract property for command name
+        #region Properties
+
+        /// <summary>
+        /// Gets the name of the command, which defaults to the class name.
+        /// </summary>
         public string Name { get { return GetType().Name; } }
 
+        /// <summary>
+        /// Indicates whether the command supports undo functionality.
+        /// </summary>
         public bool Undoable { get; init; }
+
+        /// <summary>
+        /// Indicates whether the command should be added to the execution history.
+        /// </summary>
         protected bool AddToHistory { get; init; }
+
+        /// <summary>
+        /// The client service associated with this command.
+        /// </summary>
         protected T Service { get; init; }
 
+        #endregion
+
+        #region Constructor
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="Command{T}"/> class.
+        /// </summary>
+        /// <param name="clientService">The client service associated with this command.</param>
+        /// <param name="undoable">Specifies whether the command supports undo functionality.</param>
+        /// <param name="addToHistory">Specifies whether the command should be added to the execution history.</param>
         public Command(T clientService, bool undoable = false, bool addToHistory = true)
         {
             Undoable = undoable;
             Service = clientService;
             AddToHistory = addToHistory;
         }
+
+        #endregion
+
+        #region Public Methods
+
+        /// <summary>
+        /// Executes the command. If successful and history addition is enabled, the command is added to the service's execution history.
+        /// </summary>
         public void Execute()
         {
             if (TryExecute() && AddToHistory)
@@ -1887,7 +2475,10 @@ namespace PrintPress.UICommand
                 Service.ExecuteHistory.Push(this);
             }
         }
-        protected abstract bool TryExecute();
+
+        /// <summary>
+        /// Undoes the command execution if undo functionality is enabled.
+        /// </summary>
         public void UndoExecute()
         {
             if (!Undoable)
@@ -1899,20 +2490,36 @@ namespace PrintPress.UICommand
                 Service.UndoHistory.Push(this);
             }
         }
-        protected virtual bool TryUndoExecute() 
-        { 
+
+        #endregion
+
+        #region Protected Methods
+
+        /// <summary>
+        /// Attempts to execute the command. Must be implemented in derived classes.
+        /// </summary>
+        /// <returns>True if the execution was successful; otherwise, false.</returns>
+        protected abstract bool TryExecute();
+
+        /// <summary>
+        /// Attempts to undo the command execution. Can be overridden in derived classes.
+        /// </summary>
+        /// <returns>True if the undo operation was successful; otherwise, false.</returns>
+        protected virtual bool TryUndoExecute()
+        {
             return false;
         }
+
+        #endregion
     }
 }
 using PrintPress.UI;
-using PrintPress.UIService;
 using PrintPress.UIService.Abstract;
 using System.Diagnostics;
 
 namespace PrintPress.UICommand.ContentCommand
 {
-    internal class ExitCommand<T> : Command<T> where T : ClientService<T>
+    public class ExitCommand<T> : Command<T> where T : ClientService<T>
     {
         ClientWindow window;
         public ExitCommand(T clientService, ClientWindow clientWindow): base(clientService)
@@ -1940,12 +2547,11 @@ namespace PrintPress.UICommand.ContentCommand
         }
     }
 }
-using PrintPress.UI;
 using PrintPress.UIService.Abstract;
 
 namespace PrintPress.UICommand.ContentCommand
 {
-    internal class RedoCommand<T> : Command<T> where T : ClientService<T>
+    public class RedoCommand<T> : Command<T> where T : ClientService<T>
     {
         public RedoCommand(T clientService): base(clientService, false, false)
         {
@@ -1977,7 +2583,7 @@ using PrintPress.UIService.Abstract;
 
 namespace PrintPress.UICommand.ContentCommand
 {
-    internal class UndoCommand<T> : Command<T> where T : ClientService<T>
+    public class UndoCommand<T> : Command<T> where T : ClientService<T>
     {
         public UndoCommand(T clientService): base(clientService, false, false)
         {
@@ -2010,7 +2616,7 @@ using static System.Windows.Forms.ListView;
 
 namespace PrintPress.UICommand.ContentCommand
 {
-    internal class UpdateActiveContentCommand<T> : Command<T> where T : ContentService<T>
+    public class UpdateActiveContentCommand<T> : Command<T> where T : ContentService<T>
     {
         SelectedListViewItemCollection _items;
         public UpdateActiveContentCommand(T contentService, SelectedListViewItemCollection items) : base(contentService)
@@ -2042,7 +2648,7 @@ using PrintPress.UIService.Abstract;
 
 namespace PrintPress.UICommand.ContentCommand
 {
-    internal class UpdateContentStatusCommand<T> : Command<T> where T : ContentService<T>
+    public class UpdateContentStatusCommand<T> : Command<T> where T : ContentService<T>
     {
         ContentState _state;
         public UpdateContentStatusCommand(T contentService, int index) : base(contentService)
@@ -2066,7 +2672,7 @@ using PrintPress.UIService.Abstract;
 
 namespace PrintPress.UICommand.ContentCommand
 {
-    internal class UpdateContentTextCommand<T> : Command<T> where T : ContentService<T>
+    public class UpdateContentTextCommand<T> : Command<T> where T : ContentService<T>
     {
         private string _newText = string.Empty;
         private string _oldText = string.Empty;
@@ -2102,7 +2708,7 @@ using PrintPress.UIService.Abstract;
 
 namespace PrintPress.UICommand.ContentCommand
 {
-    internal class UpdateNotesTextCommand<T> : Command<T> where T : ContentService<T>
+    public class UpdateNotesTextCommand<T> : Command<T> where T : ContentService<T>
     {
         private string _newText = string.Empty;
         private string _oldText = string.Empty;
@@ -2134,7 +2740,7 @@ using PrintPress.UIService.Abstract;
 
 namespace PrintPress.UICommand.ContentCommand
 {
-    internal class UpdateTitleTextCommand<T> : Command<T> where T : ContentService<T>
+    public class UpdateTitleTextCommand<T> : Command<T> where T : ContentService<T>
     {
         private string _newText = string.Empty;
         private string _oldText = string.Empty;
@@ -2171,7 +2777,7 @@ using PrintPress.UIService;
 
 namespace PrintPress.UICommand.ContentCommand.Journalism
 {
-    internal class AddStoryCommand : Command<JournalismService>
+    public class AddStoryCommand : Command<JournalismService>
     {
 
         public AddStoryCommand(JournalismService service) : base(service, false) { }
@@ -2194,7 +2800,7 @@ using PrintPress.UIService;
 
 namespace PrintPress.UICommand.ContentCommand.Journalism
 {
-    internal class SaveActiveStoryCommand : Command<JournalismService>
+    public class SaveActiveStoryCommand : Command<JournalismService>
     {
         public SaveActiveStoryCommand(JournalismService service)  : base(service) { }
 
@@ -2215,7 +2821,7 @@ using PrintPress.UIService.Abstract;
 
 namespace PrintPress.UICommand.ContentCommand
 {
-    internal class UpdateSourcesCommand : Command<JournalismService>
+    public class UpdateSourcesCommand : Command<JournalismService>
     {
         private string _newText = string.Empty;
         private string _oldText = string.Empty;
@@ -2254,24 +2860,51 @@ using PrintPress.UIService.Abstract;
 
 namespace PrintPress.UIService
 {
-    internal class JournalismService : ContentService<JournalismService>
+    /// <summary>
+    /// Provides services and logic specific to the Journalism department.
+    /// </summary>
+    public class JournalismService : ContentService<JournalismService>
     {
-        // Properties
+        #region Properties
 
+        /// <summary>
+        /// Gets the department type associated with the service.
+        /// </summary>
         public override Department Type { get { return Department.Journalism; } }
+
+        /// <summary>
+        /// Dictionary containing all story data managed by the active employee.
+        /// </summary>
         public Dictionary<int, StoryData> ContentList { get; set; } = [];
+
+        /// <summary>
+        /// Gets the content list as a dictionary for journalism-related content.
+        /// </summary>
         public override Dictionary<int, StoryData> GetContentList { get { return ContentList; } }
-        public override StoryData? ActiveContent 
+
+        /// <summary>
+        /// Gets the currently active story based on the active content ID.
+        /// </summary>
+        public override StoryData? ActiveContent
         {
-            get 
+            get
             {
                 if (ContentList.ContainsKey(ActiveID))
                 {
                     return ContentList[ActiveID];
                 }
                 return null;
-            } 
+            }
         }
+
+        #endregion
+
+        #region Constructors
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="JournalismService"/> class with the specified active employee.
+        /// </summary>
+        /// <param name="activeEmployee">The active employee associated with this service.</param>
         public JournalismService(EmployeeData activeEmployee) : base(activeEmployee)
         {
             LoadStoryList();
@@ -2283,10 +2916,13 @@ namespace PrintPress.UIService
             ActiveID = ContentList.ElementAt(0).Key;
         }
 
-        // Public functions
+        #endregion
 
-        // Helper functions
+        #region Public Functions
 
+        /// <summary>
+        /// Loads the list of stories associated with the active employee.
+        /// </summary>
         public void LoadStoryList()
         {
             StoryData[] stories;
@@ -2303,6 +2939,8 @@ namespace PrintPress.UIService
 
             OnContentListChanged();
         }
+
+        #endregion
     }
 }
 using PrintPress.Controller;
@@ -2313,24 +2951,53 @@ using PrintPress.UIService.Abstract;
 
 namespace PrintPress.UIService
 {
-    internal class MarketingService : ContentService<MarketingService>
+    /// <summary>
+    /// Provides services and logic specific to the Marketing department.
+    /// </summary>
+    public class MarketingService : ContentService<MarketingService>
     {
-        // Properties
+        #region Properties
 
+        /// <summary>
+        /// Gets the department type associated with the service.
+        /// </summary>
         public override Department Type { get { return Department.Marketing; } }
+
+        /// <summary>
+        /// List of adverts managed by the active employee.
+        /// </summary>
         public List<AdvertData> EmployeeAdverts { get; set; } = [];
+
+        /// <summary>
+        /// Gets the content list as a dictionary (not applicable for MarketingService).
+        /// </summary>
         public override Dictionary<int, StoryData> GetContentList { get; }
+
+        /// <summary>
+        /// Gets the currently active advert.
+        /// </summary>
         public override AdvertData ActiveContent { get { return EmployeeAdverts[ActiveID]; } }
 
-        // Constructors
+        #endregion
 
+        #region Constructors
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="MarketingService"/> class with the specified active employee.
+        /// </summary>
+        /// <param name="activeEmployee">The active employee associated with this service.</param>
         public MarketingService(EmployeeData activeEmployee) : base(activeEmployee)
         {
             LoadAdvertList();
         }
 
-        // Helper functions
+        #endregion
 
+        #region Helper Functions
+
+        /// <summary>
+        /// Loads the list of adverts associated with the active employee from the database.
+        /// </summary>
         private void LoadAdvertList()
         {
             CommandReturnState crs = CommercialDataController.Instance.GetAdverts(ActiveEmployee.Id, out AdvertData[] ads, out string message);
@@ -2345,6 +3012,8 @@ namespace PrintPress.UIService
 
             OnContentListChanged();
         }
+
+        #endregion
     }
 }
 using PrintPress.Controller.Data;
@@ -2354,10 +3023,24 @@ using PrintPress.UICommand;
 
 namespace PrintPress.UIService.Abstract
 {
-    internal abstract class ClientService<T> where T : ClientService<T>
-    { 
+    /// <summary>
+    /// Represents an abstract base class for client services, managing the operations, commands, and user context within a specific department.
+    /// </summary>
+    /// <typeparam name="T">The specific type of the client service inheriting from this base class.</typeparam>
+    public abstract class ClientService<T> where T : ClientService<T>
+    {
+        #region Properties
+
+        /// <summary>
+        /// Gets the active employee associated with this client service.
+        /// </summary>
         public EmployeeData ActiveEmployee { get; init; }
-        public string Name 
+
+        /// <summary>
+        /// Gets the name of the department associated with this client service.
+        /// </summary>
+        /// <exception cref="Exception">Thrown if the department does not have a valid name assigned.</exception>
+        public string Name
         {
             get
             {
@@ -2368,10 +3051,30 @@ namespace PrintPress.UIService.Abstract
                 throw new Exception("Department does not have a valid name assigned");
             }
         }
+
+        /// <summary>
+        /// Gets the type of department associated with this client service.
+        /// </summary>
         public abstract Department Type { get; }
+
+        /// <summary>
+        /// Gets the stack of executed commands for this client service.
+        /// </summary>
         public Stack<Command<T>> ExecuteHistory { get; init; }
+
+        /// <summary>
+        /// Gets the stack of undone commands for this client service.
+        /// </summary>
         public Stack<Command<T>> UndoHistory { get; init; }
 
+        #endregion
+
+        #region Constructor
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ClientService{T}"/> class.
+        /// </summary>
+        /// <param name="employee">The active employee associated with this client service.</param>
         public ClientService(EmployeeData employee)
         {
             ActiveEmployee = employee;
@@ -2379,11 +3082,20 @@ namespace PrintPress.UIService.Abstract
             UndoHistory = new Stack<Command<T>>();
         }
 
+        #endregion
+
+        #region Public Methods
+
+        /// <summary>
+        /// Clears all command histories for this client service.
+        /// </summary>
         public void Close()
         {
             ExecuteHistory.Clear();
             UndoHistory.Clear();
         }
+
+        #endregion
     }
 }
 using PrintPress.Data;
@@ -2392,18 +3104,28 @@ using System;
 namespace PrintPress.UIService.Abstract
 {
     /// <summary>
-    /// 
+    /// Represents a base class for managing content-specific services, providing functionality for handling content data and associated events.
     /// </summary>
-    /// <typeparam name="T"></typeparam>
-    internal abstract class ContentService<T> : ClientService<T> where T : ContentService<T>
+    /// <typeparam name="T">The specific type of the content service inheriting from this base class.</typeparam>
+    public abstract class ContentService<T> : ClientService<T> where T : ContentService<T>
     {
-        // Properties
+        #region Properties
 
+        /// <summary>
+        /// Gets the currently active content.
+        /// </summary>
         public abstract ContentData? ActiveContent { get; }
+
+        /// <summary>
+        /// Gets the list of content data indexed by their unique IDs.
+        /// </summary>
         public abstract Dictionary<int, StoryData> GetContentList { get; }
 
         private int _activeContentID = -1;
 
+        /// <summary>
+        /// Gets or sets the ID of the currently active content.
+        /// </summary>
         public int ActiveID
         {
             get
@@ -2419,8 +3141,12 @@ namespace PrintPress.UIService.Abstract
         }
 
         private string _statusMessage = string.Empty;
+
+        /// <summary>
+        /// Gets or sets the current status message displayed in the tab.
+        /// </summary>
         public string TabStatusMessage
-        { 
+        {
             get
             {
                 return _statusMessage;
@@ -2432,37 +3158,83 @@ namespace PrintPress.UIService.Abstract
             }
         }
 
-        // Constructors
+        #endregion
 
+        #region Constructors
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ContentService{T}"/> class.
+        /// </summary>
+        /// <param name="employee">The active employee associated with this service.</param>
         public ContentService(EmployeeData employee) : base(employee) { }
 
-        // Event handling
+        #endregion
 
+        #region Event Handling
+
+        /// <summary>
+        /// Event triggered when the content list changes.
+        /// </summary>
         public event EventHandler<EventArgs>? ContentListChanged;
+
+        /// <summary>
+        /// Triggers the <see cref="ContentListChanged"/> event.
+        /// </summary>
         protected virtual void OnContentListChanged()
         {
             ContentListChanged?.Invoke(this, new EventArgs());
         }
+
+        /// <summary>
+        /// Event triggered when the status message changes.
+        /// </summary>
         public event EventHandler<EventArgs>? StatusMessageChanged;
+
+        /// <summary>
+        /// Triggers the <see cref="StatusMessageChanged"/> event.
+        /// </summary>
         private void OnTabStatusMessageChanged()
         {
             StatusMessageChanged?.Invoke(this, new EventArgs());
         }
 
+        /// <summary>
+        /// Event triggered before the active content changes.
+        /// </summary>
         public event EventHandler<EventArgs>? ActiveChanging;
+
+        /// <summary>
+        /// Triggers the <see cref="ActiveChanging"/> event.
+        /// </summary>
         protected virtual void BeforeActiveChanged()
         {
             ActiveChanging?.Invoke(this, new EventArgs());
         }
+
+        /// <summary>
+        /// Event triggered after the active content changes.
+        /// </summary>
         public event EventHandler<EventArgs>? ActiveChanged;
+
+        /// <summary>
+        /// Triggers the <see cref="ActiveChanged"/> event.
+        /// </summary>
         protected virtual void OnActiveChanged()
         {
             ActiveChanged?.Invoke(this, new EventArgs());
         }
 
-        // Helper functions
+        #endregion
 
-        protected Dictionary<int,C> SortContents<C>(C[] contents) where C : ContentData
+        #region Helper Functions
+
+        /// <summary>
+        /// Sorts an array of content data by their last saved date and maps them to a dictionary by their unique IDs.
+        /// </summary>
+        /// <typeparam name="C">The specific type of content data.</typeparam>
+        /// <param name="contents">The array of content data to sort.</param>
+        /// <returns>A dictionary mapping content IDs to content data.</returns>
+        protected Dictionary<int, C> SortContents<C>(C[] contents) where C : ContentData
         {
             List<C> sortedContents = SortContentByDate(contents.ToList());
             Dictionary<int, C> idStoryPair = new();
@@ -2473,20 +3245,26 @@ namespace PrintPress.UIService.Abstract
             return idStoryPair;
         }
 
+        /// <summary>
+        /// Sorts a list of content data by their last saved date.
+        /// </summary>
+        /// <typeparam name="C">The specific type of content data.</typeparam>
+        /// <param name="contentList">The list of content data to sort.</param>
+        /// <returns>The sorted list of content data.</returns>
         protected List<C> SortContentByDate<C>(List<C> contentList) where C : ContentData
         {
             contentList.Sort((x, y) => x.LastSaved.CompareTo(y.LastSaved));
             return contentList;
         }
+
+        #endregion
     }
 }
 using PrintPress.Controller;
 using PrintPress.Controller.Data;
 using PrintPress.Controller.Enum;
 using PrintPress.Data;
-using PrintPress.Data.Builder;
 using PrintPress.Data.Enum;
-using System.Diagnostics.Tracing;
 using System.Net.Mail;
 
 namespace PrintPress.UI
@@ -2554,7 +3332,7 @@ namespace PrintPress.UI
         private void sendClassifiedSqlButton_Click(object sender, EventArgs e)
         {
             if (ClassifiedDataController.Instance.SendSql(clasSqlStringText.Text, out string result) ==
-                Controller.Enum.CommandReturnState.FOUND) MessageBox.Show(result);
+                CommandReturnState.FOUND) MessageBox.Show(result);
         }
 
         private void addEmployeeButton_Click(object sender, EventArgs e)
@@ -3455,13 +4233,35 @@ using System.Net.Mail;
 
 namespace PrintPress
 {
+    /// <summary>
+    /// Represents the main Launcher form, providing user authentication and client window management.
+    /// </summary>
     internal partial class Launcher : Form
-    {  
+    {
+        #region Fields and Properties
+
+        /// <summary>
+        /// Stores the currently logged-in user.
+        /// </summary>
         private EmployeeData? activeUser;
+
+        /// <summary>
+        /// Indicates whether admin override mode is active.
+        /// </summary>
         private bool adminOverride = false;
 
+        /// <summary>
+        /// Tracks currently active client windows.
+        /// </summary>
         private List<ClientWindow> activeClients = new List<ClientWindow>();
 
+        #endregion
+
+        #region Constructor
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="Launcher"/> class and sets up key event handling.
+        /// </summary>
         public Launcher()
         {
             InitializeComponent();
@@ -3469,8 +4269,13 @@ namespace PrintPress
             KeyDown += keyDownEvent;
         }
 
-        //// Event handelling
+        #endregion
 
+        #region Event Handlers
+
+        /// <summary>
+        /// Handles the click event for the Log In button.
+        /// </summary>
         private void LogInButton_Click(object sender, EventArgs e)
         {
             logInButton.Enabled = false;
@@ -3487,14 +4292,20 @@ namespace PrintPress
             logInButton.Enabled = true;
         }
 
+        /// <summary>
+        /// Handles the click event for the Launch button.
+        /// </summary>
         private void LaunchButton_Click(object sender, EventArgs e)
         {
             LaunchClient();
         }
 
+        /// <summary>
+        /// Handles the click event for the Admin label link.
+        /// </summary>
         private void adminLabel_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
         {
-            if ((activeUser == null || !activeUser.HasClearance(Department.Admin)) && adminOverride == false)
+            if ((activeUser == null || !activeUser.HasClearance(Department.Admin)) && !adminOverride)
             {
                 MessageBox.Show("Present valid admin credentials.");
                 return;
@@ -3503,16 +4314,20 @@ namespace PrintPress
             adminForm.ShowDialog();
         }
 
+        /// <summary>
+        /// Handles keydown events to toggle admin override.
+        /// </summary>
         private void keyDownEvent(object? sender, KeyEventArgs keyEventArgs)
         {
-            if (keyEventArgs.KeyValue == 67) // c key
+            if (keyEventArgs.KeyValue == 67) // 'C' key
             {
                 adminOverride = !adminOverride;
             }
         }
 
-        //// 
-
+        /// <summary>
+        /// Handles the closing event for client windows, removing them from the active client list.
+        /// </summary>
         private void OnClientClosing(object? sender, FormClosingEventArgs fcArgs)
         {
             if (sender == null)
@@ -3530,14 +4345,19 @@ namespace PrintPress
             }
         }
 
-        //// Helper functions
+        #endregion
 
+        #region Private Methods
+
+        /// <summary>
+        /// Launches a client window based on the selected department.
+        /// </summary>
         private void LaunchClient()
         {
             if (!DataTools.DepartmentString(clientComboBox.Text, out Department department) ||
                 activeUser == null || !activeUser.HasClearance(department))
             {
-                MessageBox.Show("Inavlid department selection");
+                MessageBox.Show("Invalid department selection.");
                 return;
             }
 
@@ -3568,6 +4388,9 @@ namespace PrintPress
             window.Show();
         }
 
+        /// <summary>
+        /// Removes any null entries from the active client list.
+        /// </summary>
         private void RemoveNullForms()
         {
             for (int i = 0; i < activeClients.Count; i++)
@@ -3579,33 +4402,31 @@ namespace PrintPress
             }
         }
 
+        /// <summary>
+        /// Checks if a client window for a specific department is already open.
+        /// </summary>
         private bool IsClientOpen(Department department)
         {
-            ClientWindow[] typeClients = activeClients.Where(x => x.Type == department).ToArray();
-            if (typeClients.Length > 0)
-            {
-                return true;
-            }
-            return false;
+            return activeClients.Any(x => x.Type == department);
         }
 
+        /// <summary>
+        /// Processes the log-in functionality, validating credentials and setting up the session.
+        /// </summary>
         private void ProcessLogIn()
         {
             bool validFormat = true;
             string statusMessage = string.Empty;
 
-            MailAddress mailAddress;
-            string password = passwordText.Text;
-
-            if (!ValidEmailFormat(emailText.Text, out mailAddress))
+            if (!ValidEmailFormat(emailText.Text, out MailAddress mailAddress))
             {
                 validFormat = false;
-                statusMessage = "invalid email";
+                statusMessage = "Invalid email.";
             }
-            else if (!ValidPasswordFormat(password))
+            else if (!ValidPasswordFormat(passwordText.Text))
             {
                 validFormat = false;
-                statusMessage = "invalid password";
+                statusMessage = "Invalid password.";
             }
 
             if (!validFormat)
@@ -3615,53 +4436,54 @@ namespace PrintPress
             }
 
             ClassifiedDataController classifiedDC = ClassifiedDataController.Instance;
-            bool valid = classifiedDC.ValidateCredentials(mailAddress, password, out string message, out EmployeeData employee);
-
-            if (!valid)
+            if (!classifiedDC.ValidateCredentials(mailAddress, passwordText.Text, out string message, out EmployeeData employee))
             {
                 UpdateStatusLabel(loginStatusLabel, message, StatusLabelColour.Red);
                 return;
             }
 
             activeUser = employee;
-
-            UpdateStatusLabel(loginStatusLabel, "Logged in as " + mailAddress.User, StatusLabelColour.Green);
-            UpdateStatusLabel(clientStatusLabel, "select client", StatusLabelColour.Grey);
+            UpdateStatusLabel(loginStatusLabel, $"Logged in as {mailAddress.User}", StatusLabelColour.Green);
+            UpdateStatusLabel(clientStatusLabel, "Select client", StatusLabelColour.Grey);
             emailText.Enabled = false;
             passwordText.Enabled = false;
             logInButton.Text = "Log Out";
             PopulateClientCombobox();
         }
 
+        /// <summary>
+        /// Processes the log-out functionality, resetting the session and UI.
+        /// </summary>
         private void ProcessLogOut()
         {
             activeUser = null;
-
-            UpdateStatusLabel(loginStatusLabel, "enter credentials", StatusLabelColour.Grey);
-            UpdateStatusLabel(clientStatusLabel, "log in to launch client", StatusLabelColour.Grey);
+            UpdateStatusLabel(loginStatusLabel, "Enter credentials", StatusLabelColour.Grey);
+            UpdateStatusLabel(clientStatusLabel, "Log in to launch client", StatusLabelColour.Grey);
             emailText.Enabled = true;
             passwordText.Enabled = true;
             logInButton.Text = "Log In";
-            passwordText.Text = string.Empty;
+            passwordText.Clear();
             clientComboBox.Items.Clear();
             launchButton.Enabled = false;
         }
 
+        /// <summary>
+        /// Updates the specified label with a new message and color.
+        /// </summary>
         private void UpdateStatusLabel(Label label, string message, StatusLabelColour colour)
         {
             label.Text = message;
-            switch (colour)
+            label.ForeColor = colour switch
             {
-                default:
-                case StatusLabelColour.Grey:
-                    label.ForeColor = SystemColors.ControlDarkDark; break;
-                case StatusLabelColour.Red:
-                    label.ForeColor = Color.Firebrick; break;
-                case StatusLabelColour.Green:
-                    label.ForeColor = Color.Green; break;
-            }
+                StatusLabelColour.Red => Color.Firebrick,
+                StatusLabelColour.Green => Color.Green,
+                _ => SystemColors.ControlDarkDark
+            };
         }
 
+        /// <summary>
+        /// Populates the client selection combo box with available departments for the active user.
+        /// </summary>
         private void PopulateClientCombobox()
         {
             clientComboBox.Items.Clear();
@@ -3683,20 +4505,23 @@ namespace PrintPress
             }
         }
 
+        /// <summary>
+        /// Validates the format of an email address.
+        /// </summary>
         private bool ValidEmailFormat(string email, out MailAddress mailAddress)
         {
             return MailAddress.TryCreate(email, out mailAddress);
         }
 
-        private bool ValidPasswordFormat(string passsword)
+        /// <summary>
+        /// Validates the format of a password.
+        /// </summary>
+        private bool ValidPasswordFormat(string password)
         {
-            if (string.IsNullOrEmpty(passsword) ||
-                passsword.Length < 3)
-            {
-                return false;
-            }
-            return true;
+            return !string.IsNullOrEmpty(password) && password.Length >= 3;
         }
+
+        #endregion
     }
 }
 namespace PrintPress
@@ -3902,7 +4727,6 @@ namespace PrintPress
 }
 using PrintPress.Data.Enum;
 using PrintPress.UIService;
-using PrintPress.UIWindow.Interface;
 
 namespace PrintPress.UI
 {
@@ -4093,7 +4917,7 @@ using System.ComponentModel;
 
 namespace PrintPress.UI
 {
-    internal abstract partial class ClientWindow : Form
+    public abstract partial class ClientWindow : Form
     {
         public abstract Department Type { get; }
         public ClientWindow()
@@ -4103,7 +4927,7 @@ namespace PrintPress.UI
                 return;
             }
             InitializeComponent();
-        } // TALK ABOUT LOG
+        }
     }
 }
 namespace PrintPress.UI
@@ -4225,19 +5049,57 @@ using PrintPress.Data;
 namespace PrintPress.UI
 {
 #if DEBUG
+    /// <summary>
+    /// Represents the abstract base class for content-based windows in the application, 
+    /// using a dummy client implementation during debugging.
+    /// </summary>
     internal abstract partial class ContentWindow : PrintPress.UI.Tools.DummyClient
 #else
+    /// <summary>
+    /// Represents the abstract base class for content-based windows in the application.
+    /// </summary>
     internal abstract partial class ContentWindow : PrintPress.UI.ClientWindow
 #endif
     {
+        #region Properties
+
+        /// <summary>
+        /// Indicates whether the content display is currently being updated, preventing recursive updates.
+        /// </summary>
         protected bool UpdatingDisplay { get; set; } = false;
+
+        #endregion
+
+        #region Constructor
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ContentWindow"/> class and sets up the UI components.
+        /// </summary>
         public ContentWindow() : base()
         {
             InitializeComponent();
         }
 
+        #endregion
+
+        #region Event Handlers
+
+        /// <summary>
+        /// Handles the selection change in the content list view. 
+        /// Can be overridden by derived classes to provide specific functionality.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">Event data.</param>
         protected virtual void contentListView_SelectedIndexChanged(object sender, EventArgs e) { }
 
+        #endregion
+
+        #region Content Display Management
+
+        /// <summary>
+        /// Updates the content display with the details of the provided content data.
+        /// </summary>
+        /// <param name="content">The content data to display.</param>
         protected virtual void UpdateContentDisplay(ContentData? content)
         {
             if (content == null)
@@ -4257,6 +5119,11 @@ namespace PrintPress.UI
             UpdatingDisplay = false;
         }
 
+        /// <summary>
+        /// Updates the content list display with a list of employee content items.
+        /// </summary>
+        /// <typeparam name="T">The type of content data.</typeparam>
+        /// <param name="employeeContent">The list of employee content to display.</param>
         protected virtual void UpdateContentListDisplay<T>(List<T> employeeContent) where T : ContentData
         {
             contentListView.BeginUpdate();
@@ -4269,14 +5136,20 @@ namespace PrintPress.UI
                 {
                     text = "_untitled_";
                 }
-                ListViewItem item = new ListViewItem(text, contentListView.Groups[(int)content.State]);
-                item.Tag = content.ContentID;
+                ListViewItem item = new ListViewItem(text, contentListView.Groups[(int)content.State])
+                {
+                    Tag = content.ContentID
+                };
                 contentListView.Items.Add(item);
             }
 
             contentListView.EndUpdate();
         }
 
+        /// <summary>
+        /// Updates the save state label based on whether there are unsaved local changes.
+        /// </summary>
+        /// <param name="localChanges">Indicates whether there are unsaved local changes.</param>
         protected void SetSavedStateLabel(bool localChanges)
         {
             if (!localChanges)
@@ -4285,19 +5158,43 @@ namespace PrintPress.UI
                 saveStateLabel.ForeColor = Color.Green;
                 return;
             }
+
             saveStateLabel.Text = "unsaved changes";
             saveStateLabel.ForeColor = Color.OrangeRed;
 
             saveStateTitleLabel.Location = new Point(saveStateLabel.Location.X - 92, saveStateLabel.Location.Y);
         }
 
-        // Abstract event calls, for specific implementation
+        #endregion
 
+        #region Abstract Methods
+
+        /// <summary>
+        /// Abstract method to handle text changes in the content text field.
+        /// </summary>
         protected abstract void contentText_TextChanged(object sender, EventArgs e);
+
+        /// <summary>
+        /// Abstract method to handle text changes in the title text field.
+        /// </summary>
         protected abstract void titleText_TextChanged(object sender, EventArgs e);
+
+        /// <summary>
+        /// Abstract method to handle text changes in the notes text field.
+        /// </summary>
         protected abstract void notesText_TextChanged(object sender, EventArgs e);
+
+        /// <summary>
+        /// Abstract method to handle selection changes in the first combo box.
+        /// </summary>
         protected abstract void comboBox1_SelectedIndexChanged(object sender, EventArgs e);
+
+        /// <summary>
+        /// Abstract method to handle selection changes in the content status combo box.
+        /// </summary>
         protected abstract void contentStatusComboBox_SelectedIndexChanged(object sender, EventArgs e);
+
+        #endregion
     }
 }
 
@@ -4335,11 +5232,11 @@ namespace PrintPress.UI
         /// </summary>
         private void InitializeComponent()
         {
-            ListViewGroup listViewGroup6 = new ListViewGroup("In Progress", HorizontalAlignment.Left);
-            ListViewGroup listViewGroup7 = new ListViewGroup("Returned", HorizontalAlignment.Left);
-            ListViewGroup listViewGroup8 = new ListViewGroup("Awaiting review", HorizontalAlignment.Left);
-            ListViewGroup listViewGroup9 = new ListViewGroup("In use", HorizontalAlignment.Left);
-            ListViewGroup listViewGroup10 = new ListViewGroup("Retired", HorizontalAlignment.Left);
+            ListViewGroup listViewGroup1 = new ListViewGroup("In Progress", HorizontalAlignment.Left);
+            ListViewGroup listViewGroup2 = new ListViewGroup("Returned", HorizontalAlignment.Left);
+            ListViewGroup listViewGroup3 = new ListViewGroup("Awaiting review", HorizontalAlignment.Left);
+            ListViewGroup listViewGroup4 = new ListViewGroup("In use", HorizontalAlignment.Left);
+            ListViewGroup listViewGroup5 = new ListViewGroup("Retired", HorizontalAlignment.Left);
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(ContentWindow));
             contentText = new TextBox();
             contentListView = new ListView();
@@ -4381,18 +5278,18 @@ namespace PrintPress.UI
             // contentListView
             // 
             contentListView.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left;
-            listViewGroup6.CollapsedState = ListViewGroupCollapsedState.Expanded;
-            listViewGroup6.Header = "In Progress";
-            listViewGroup6.Name = "inProgressGroup";
-            listViewGroup7.Header = "Returned";
-            listViewGroup7.Name = "returnedGroup";
-            listViewGroup8.Header = "Awaiting review";
-            listViewGroup8.Name = "awaitingReviewGroup";
-            listViewGroup9.Header = "In use";
-            listViewGroup9.Name = "inUseGroup";
-            listViewGroup10.Header = "Retired";
-            listViewGroup10.Name = "retiredGroup";
-            contentListView.Groups.AddRange(new ListViewGroup[] { listViewGroup6, listViewGroup7, listViewGroup8, listViewGroup9, listViewGroup10 });
+            listViewGroup1.CollapsedState = ListViewGroupCollapsedState.Expanded;
+            listViewGroup1.Header = "In Progress";
+            listViewGroup1.Name = "inProgressGroup";
+            listViewGroup2.Header = "Returned";
+            listViewGroup2.Name = "returnedGroup";
+            listViewGroup3.Header = "Awaiting review";
+            listViewGroup3.Name = "awaitingReviewGroup";
+            listViewGroup4.Header = "In use";
+            listViewGroup4.Name = "inUseGroup";
+            listViewGroup5.Header = "Retired";
+            listViewGroup5.Name = "retiredGroup";
+            contentListView.Groups.AddRange(new ListViewGroup[] { listViewGroup1, listViewGroup2, listViewGroup3, listViewGroup4, listViewGroup5 });
             contentListView.HeaderStyle = ColumnHeaderStyle.None;
             contentListView.ImeMode = ImeMode.Off;
             contentListView.Location = new Point(12, 50);
@@ -4711,9 +5608,6 @@ namespace PrintPress.UI
     }
 }
 using PrintPress.Data.Enum;
-using PrintPress.UIService;
-using PrintPress.UIService.Abstract;
-using PrintPress.UIWindow.Interface;
 
 namespace PrintPress.UI.Tools
 {
@@ -4840,149 +5734,216 @@ namespace PrintPress.UI.Enum
         Green
     }
 }
-using PrintPress.Controller.Data;
-using PrintPress.Data.Enum;
-using PrintPress.UIService;
-using PrintPress.UIService.Abstract;
-
-namespace PrintPress.UIWindow.Interface
-{
-    internal interface IConcreteClientWindow<T> where T : ClientService<T>
-    {
-        public T Service { get; init; }
-        public Department Type { get { return Service.Type; } }
-        public string Name
-        {
-            get
-            {
-                if (DataTools.DepartmentString(Type, out string name))
-                    return name;
-                throw new NotImplementedException("Client service does not implement a department type.");
-            }
-        }
-    }
-}
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace PrintPress.UIWindow.Interface
-{
-    internal interface IContentWindow
-    {
-
-    }
-}
 [assembly: Parallelize(Scope = ExecutionScope.MethodLevel)]
+using Microsoft.Data.SqlClient;
 using PrintPress.Controller;
+using PrintPress.Controller.Data;
 using PrintPress.Controller.Enum;
 using PrintPress.Data;
-using PrintPress.Data.Builder;
 using PrintPress.Data.Enum;
+using PrintPress.UICommand.ContentCommand;
+using PrintPress.UICommand.ContentCommand.Journalism;
+using PrintPress.UIService;
 using PrintPressUnitTesting.DataController.Tools;
+using System.Net.Mail;
 
 namespace PrintPressUnitTesting.DataController
 {
     [TestClass]
-    public sealed class DataControllerTests
+    public sealed class Tests
     {
-        [TestMethod]
-        public void AllTests()
+        [TestInitialize]
+        public void Setup()
         {
-            FullStoryTableTest();
+            ClassifiedDataController.Instance.Initialise();
+            MockDataController.Instance.Initialise();
         }
 
         [TestMethod]
-        public void FullStoryTableTest()
+        public void ValidateCredentials_InvalidCredentials_ReturnsFalse()
         {
-            CommercialDataController commercialDataController = new CommercialDataController();
-            // Run test on advert table
-            MockCommercialDataController.Instance.Initialise();
+            // Arrange
+            ClassifiedDataController controller = ClassifiedDataController.Instance;
+            MailAddress invalidEmail = new MailAddress("invalid@example.com");
+            string invalidPassword = "wrongpassword";
+            string message;
+            EmployeeData employee;
 
-            // Check that adverts mock advert table is empty
-            CommandReturnState firstReadState = MockCommercialDataController.Instance.GetStories(0, out StoryData[] _, out string readErrMsg);
-            Assert.IsTrue(firstReadState == CommandReturnState.NOTFOUND, $"Unexpected DB state with error: {readErrMsg}");
+            // Act
+            bool isValid = controller.ValidateCredentials(invalidEmail, invalidPassword, out message, out employee);
 
-            // Generate test data
-            StoryData storyData = GenerateTestStory();
-
-            // Allocate space on database
-            bool allocateSuccess = MockCommercialDataController.Instance.AllocateStory(storyData.Assigned.Id, out int advertAutoId);
-            Assert.IsTrue(allocateSuccess, $"Could not allocate space for story for employee: {storyData.Assigned.Id}");
-
-            // Write story data
-            bool writeSuccess = MockCommercialDataController.Instance.UpdateStory(storyData);
-            Assert.IsTrue(writeSuccess, $"Failed to write story to database");
-
-            // CLEANUP
-            // Delete story
-            bool deleteSuccess = MockCommercialDataController.Instance.DeleteContent(storyData.ContentID);
-            Assert.IsTrue(writeSuccess, $"Failed to delete story from database");
-
-            // Verify cleanup, check mock table is empty
-            CommandReturnState secondReadState = MockCommercialDataController.Instance.GetStories(0, out StoryData[] _, out readErrMsg);
-            Assert.IsTrue(secondReadState == CommandReturnState.NOTFOUND, $"Unexpected DB state with error: {readErrMsg}");
+            // Assert
+            Assert.IsFalse(isValid, "Expected invalid credentials to return false.");
+            //Assert.AreEqual("invalid credentials", message, "Expected error message for invalid credentials.");
         }
 
-        private static StoryData GenerateTestStory()
+        [TestMethod]
+        public void UpdateContentTextCommand_Undo_ResetsOldText()
         {
-            PersonalData personalData = GenerateTestPersonalData();
+            // Arrange
+            JournalismService service = new JournalismService(new EmployeeData(1));
+            service.ActiveID = 1;
+            StoryData story = new StoryData(1, new EmployeeData(1), "Original text", "Title", null, "Notes", "Comments", ContentState.IN_PROGRESS, DateTime.Now, "Source");
+            service.ContentList[1] = story;
 
-            EmployeeData employeeData = new EmployeeData(0, personalData, "test", [Department.Journalism, Department.Editing]);
+            string newText = "Updated text";
+            UpdateContentTextCommand<JournalismService> command = new UpdateContentTextCommand<JournalismService>(service, newText);
 
-            StoryBuilder storyBuilder = new StoryBuilder();
-            storyBuilder.Text = "test";
-            storyBuilder.Notes = "test";
-            storyBuilder.State = ContentState.IN_PROGRESS;
-            storyBuilder.Assigned = employeeData;
-            storyBuilder.ContentID = -1;
-            storyBuilder.Comments = "test";
-            storyBuilder.Source = "test";
+            // Act
+            command.Execute();
+            command.UndoExecute();
 
-            return storyBuilder.ToStoryData();
+            // Assert
+            Assert.AreEqual("Original text", story.Text, "Expected text to revert to original after undo.");
         }
 
-        private static PersonalData GenerateTestPersonalData()
+        [TestMethod]
+        public void GetEmployee_ValidEmail_ReturnsEmployeeData()
         {
-            Address testAddress = GenerateTestAddress();
+            // Arrange
+            CommercialDataController controller = CommercialDataController.Instance;
+            MailAddress validEmail = new MailAddress("test@example.com");
+            EmployeeData employee;
+            string message;
 
-            PersonalDataBuilder personBuilder = new PersonalDataBuilder();
+            // Act
+            CommandReturnState state = controller.GetEmployee(validEmail, out employee, out message);
 
-            personBuilder.Address = testAddress;
-            personBuilder.Email = "test@test.com";
-            personBuilder.FirstNames = "test";
-            personBuilder.LastName = "test";
-            personBuilder.Phone = "test";
-
-            return personBuilder.ToPersonalData();
+            // Assert
+            Assert.AreEqual(CommandReturnState.FOUND, state, "Expected valid employee to be found.");
+            Assert.AreEqual(employee.Id, -1);
         }
 
-        private static Address GenerateTestAddress()
+        [TestMethod]
+        public void ClientService_ExecuteHistory_PushesExecutedCommand()
         {
-            AddressBuilder addressBuilder = new AddressBuilder();
-            addressBuilder.Road = "test";
-            addressBuilder.HouseNameOrNumber = "test";
-            addressBuilder.Country = "test";
-            addressBuilder.City = "test";
-            addressBuilder.Country = "test";
-            addressBuilder.Postcode = "test";
+            // Arrange
+            CommercialDataController.Instance.Initialise();
+            JournalismService service = new JournalismService(new EmployeeData(1));
+            AddStoryCommand command = new AddStoryCommand(service);
 
-            return addressBuilder.ToAddress();
+            // Act
+            command.Execute();
+
+            // Assert
+            Assert.IsTrue(service.ExecuteHistory.Count > 0, "Expected executed command to be added to history.");
+            Assert.AreEqual(command, service.ExecuteHistory.Peek(), "Expected last executed command to be on top of the stack.");
         }
+
+        [TestMethod]
+        public void SortContentByDate_SortsCorrectly()
+        {
+            // Arrange
+            var service = new MockJournalismService(new EmployeeData());
+            var content1 = new StoryData(1, new EmployeeData(), "Text1", "Title1", null, "Notes1", "Comments1", ContentState.IN_PROGRESS, DateTime.Now.AddDays(-2), "Source1");
+            var content2 = new StoryData(2, new EmployeeData(), "Text2", "Title2", null, "Notes2", "Comments2", ContentState.IN_PROGRESS, DateTime.Now, "Source2");
+
+            List<ContentData> unsorted = new List<ContentData> { content2, content1 };
+
+            // Act
+            List<ContentData> sorted = service.TestSortContentByDate(unsorted);
+
+            // Assert
+            Assert.AreEqual(content1, sorted.First(), "Expected oldest content to appear first.");
+            Assert.AreEqual(content2, sorted.Last(), "Expected newest content to appear last.");
+        }
+
+        [TestMethod]
+        public void ExecuteNonQuery_InvalidQuery_ReturnsFalse()
+        {
+            // Arrange
+            MockDataController controller = MockDataController.Instance;
+
+            SqlCommandData<object> invalidCommand = new SqlCommandData<object>
+            {
+                queryString = "INVALID SQL QUERY",
+                sqlParams = Array.Empty<SqlParameter>()
+            };
+
+            // Act
+            bool success = controller.ExecuteNonQuery(invalidCommand);
+
+            // Assert
+            Assert.IsFalse(success, "Expected ExecuteNonQuery to return false for invalid SQL.");
+        }
+
+
     }
 }
-using PrintPress.Controller;
+using PrintPress.Controller.Data;
 
 namespace PrintPressUnitTesting.DataController.Tools
 {
-    internal class MockCommercialDataController : CommercialDataController
+    /// <summary>
+    /// A mock implementation of the <see cref="IDatabaseSchema"/> interface for unit testing.
+    /// Provides a test-specific schema to simulate database tables and structure.
+    /// </summary>
+    public class MockDatabaseSchema : IDatabaseSchema
     {
-        private CommercialDataController _instance;
-        public override void ActiveInitialise()
+        /// <summary>
+        /// Gets all the table schemas defined in the mock database.
+        /// </summary>
+        public TableSchema[] AllTables
         {
+            get
+            {
+                return [CredentialTable];
+            }
+        }
+
+        /// <summary>
+        /// Gets the schema for the "Credential" table used in tests.
+        /// </summary>
+        public TableSchema CredentialTable { get { return credentialTable; } }
+
+        /// <summary>
+        /// Static definition of the "Credential" table schema for mock data.
+        /// </summary>
+        private static readonly TableSchema credentialTable = new TableSchema(
+            "TEST",
+            [
+                ["TestID", "INT IDENTITY(1,1) PRIMARY KEY"],
+                ["TestVarchar", "NVARCHAR(30) NOT NULL"]
+            ]);
+    }
+}
+using PrintPress.Controller;
+using PrintPress.Controller.Data;
+
+namespace PrintPressUnitTesting.DataController.Tools
+{
+    public class MockDataController : DataController<MockDataController>
+    {
+        private MockDatabaseSchema _schema;
+        protected override MockDatabaseSchema Tables { get { return _schema; } }
+
+        public override void Initialise()
+        {
+            _schema = new MockDatabaseSchema();
             Initialise("MockCommercialData");
+        }
+
+        public bool ExecuteNonQuery<C>(SqlCommandData<C> command)
+        {
+            return base.ExecuteNonQuery(command);
+        }
+    }
+}
+using PrintPress.Data.Enum;
+using PrintPress.Data;
+using PrintPress.UIService.Abstract;
+using PrintPress.UIService;
+
+namespace PrintPressUnitTesting.DataController.Tools
+{
+    internal class MockJournalismService : JournalismService
+    {
+        public override Department Type => throw new NotImplementedException();
+        public MockJournalismService(EmployeeData employee) : base(employee) { }
+
+        public List<ContentData> TestSortContentByDate(List<ContentData> contentList)
+        {
+            return SortContentByDate(contentList);
         }
     }
 }
@@ -5042,7 +6003,45 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("PrintPressUnitTesting")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+f21b58c7b4fc0110a1b810540cb53cdb5d03cf74")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+4ac1d64888a1af351dbf311e16a2feb3c882b953")]
+[assembly: System.Reflection.AssemblyProductAttribute("PrintPressUnitTesting")]
+[assembly: System.Reflection.AssemblyTitleAttribute("PrintPressUnitTesting")]
+[assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
+[assembly: System.Runtime.Versioning.TargetPlatformAttribute("Windows7.0")]
+[assembly: System.Runtime.Versioning.SupportedOSPlatformAttribute("Windows7.0")]
+
+// Generated by the MSBuild WriteCodeFragment class.
+
+// <auto-generated/>
+global using global::Microsoft.VisualStudio.TestTools.UnitTesting;
+global using global::System;
+global using global::System.Collections.Generic;
+global using global::System.IO;
+global using global::System.Linq;
+global using global::System.Net.Http;
+global using global::System.Threading;
+global using global::System.Threading.Tasks;
+// <autogenerated />
+using System;
+using System.Reflection;
+[assembly: global::System.Runtime.Versioning.TargetFrameworkAttribute(".NETCoreApp,Version=v8.0", FrameworkDisplayName = ".NET 8.0")]
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by a tool.
+//     Runtime Version:4.0.30319.42000
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+using System;
+using System.Reflection;
+
+[assembly: System.Reflection.AssemblyCompanyAttribute("PrintPressUnitTesting")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+86bfc5daf4f52543286b17d790ab53c7ae5c334f")]
 [assembly: System.Reflection.AssemblyProductAttribute("PrintPressUnitTesting")]
 [assembly: System.Reflection.AssemblyTitleAttribute("PrintPressUnitTesting")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

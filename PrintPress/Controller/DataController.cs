@@ -21,6 +21,9 @@ namespace PrintPress.Controller
 
         protected abstract IDatabaseSchema Tables { get; }
 
+        /// <summary>
+        /// Gets the singleton instance of the data controller.
+        /// </summary>
         public static T1 Instance
         {
             get
@@ -33,7 +36,15 @@ namespace PrintPress.Controller
             }
         }
 
+        /// <summary>
+        /// Abstract method to initialize the data controller, implemented in derived classes.
+        /// </summary>
         public abstract void Initialise();
+
+        /// <summary>
+        /// Initializes the data controller with a specified class name and sets up the database connection.
+        /// </summary>
+        /// <param name="className">The name of the class to initialize.</param>
         protected void Initialise(string className)
         {
             _className = className;
@@ -51,6 +62,9 @@ namespace PrintPress.Controller
         protected SqlConnectionStringBuilder _defaultConnectionBuilder = new SqlConnectionStringBuilder(_connectionStringBase);
         private string _className = string.Empty;
 
+        /// <summary>
+        /// Gets the name of the database associated with this controller.
+        /// </summary>
         private string DatabaseName
         {
             get
@@ -58,8 +72,12 @@ namespace PrintPress.Controller
                 return _className + "DB";
             }
         }
-        private string DatabasePath 
-        { 
+
+        /// <summary>
+        /// Gets the file path for the database.
+        /// </summary>
+        private string DatabasePath
+        {
             get
             {
                 return @$"{_rootPath}{DatabaseName}Data.mdf";
@@ -67,17 +85,25 @@ namespace PrintPress.Controller
         }
 
         /// <summary>
-        /// 
+        /// Executes a non-query SQL command on the database.
         /// </summary>
-        /// <typeparam name="C"></typeparam>
-        /// <param name="nonQuery"></param>
-        /// <param name="overrideDb"></param>
-        /// <returns></returns>
+        /// <typeparam name="C">The type of the command result.</typeparam>
+        /// <param name="nonQuery">The SQL command data to execute.</param>
+        /// <param name="overrideDb">Optional override database name.</param>
+        /// <returns>True if the command executed successfully, otherwise false.</returns>
         protected virtual bool ExecuteNonQuery<C>(SqlCommandData<C> nonQuery, string? overrideDb = null)
         {
             return Execute(nonQuery, out _, command => { command.ExecuteNonQuery(); return []; }, overrideDb);
         }
 
+        /// <summary>
+        /// Executes a query on the database and retrieves the results.
+        /// </summary>
+        /// <typeparam name="C">The type of the query result.</typeparam>
+        /// <param name="query">The SQL command data to execute.</param>
+        /// <param name="values">The results of the query.</param>
+        /// <param name="overrideDb">Optional override database name.</param>
+        /// <returns>True if the query executed successfully, otherwise false.</returns>
         protected bool ExecuteQuery<C>(SqlCommandData<C> query, out C[] values, string? overrideDb = null)
         {
             return Execute(query, out values,
@@ -96,6 +122,15 @@ namespace PrintPress.Controller
                 overrideDb);
         }
 
+        /// <summary>
+        /// Executes a SQL command on the database.
+        /// </summary>
+        /// <typeparam name="C">The type of the command result.</typeparam>
+        /// <param name="query">The SQL command data to execute.</param>
+        /// <param name="values">The results of the command.</param>
+        /// <param name="executeFunc">The function to execute with the SQL command.</param>
+        /// <param name="overrideDb">Optional override database name.</param>
+        /// <returns>True if the command executed successfully, otherwise false.</returns>
         private bool Execute<C>(SqlCommandData<C> query, out C[] values, Func<SqlCommand, C[]> executeFunc, string? overrideDb = null)
         {
             values = [];
@@ -125,6 +160,11 @@ namespace PrintPress.Controller
             }
         }
 
+        /// <summary>
+        /// Retrieves a database connection string builder, optionally overriding the database name.
+        /// </summary>
+        /// <param name="overrideDb">Optional override database name.</param>
+        /// <returns>A SQL connection string builder.</returns>
         private SqlConnectionStringBuilder GetConnectionBuilder(string? overrideDb = null)
         {
             SqlConnectionStringBuilder localConnectionBuilder = _defaultConnectionBuilder;
@@ -136,24 +176,32 @@ namespace PrintPress.Controller
             return localConnectionBuilder;
         }
 
+        /// <summary>
+        /// Verifies the existence of the database and creates it if it does not exist.
+        /// </summary>
+        /// <returns>True if the database exists or was created successfully, otherwise false.</returns>
         protected bool VerifyDatabase()
         {
             string dbName = _defaultConnectionBuilder.InitialCatalog;
-            
+
             if (DatabaseExists()) return true;
             if (TryCreateDatabase()) return true;
 
             return false;
         }
 
+        /// <summary>
+        /// Checks if the database exists on the server.
+        /// </summary>
+        /// <returns>True if the database exists, otherwise false.</returns>
         private bool DatabaseExists()
         {
             SqlCommandData<int> commandData = new SqlCommandData<int>()
             {
                 queryString = $"IF EXISTS" +
-                $"(SELECT 1 FROM sys.databases WHERE name = @databaseName AND state_desc = 'ONLINE') " +
-                $"BEGIN SELECT 1 END " +
-                $"ELSE BEGIN SELECT 0 END",
+                "(SELECT 1 FROM sys.databases WHERE name = @databaseName AND state_desc = 'ONLINE') " +
+                "BEGIN SELECT 1 END " +
+                "ELSE BEGIN SELECT 0 END",
                 sqlParams = [new SqlParameter("@databaseName", SqlDbType.NVarChar) { Value = DatabaseName }],
                 readerFunc = reader => reader.GetInt32(0)
             };
@@ -166,6 +214,10 @@ namespace PrintPress.Controller
             return Convert.ToBoolean(result);
         }
 
+        /// <summary>
+        /// Attempts to create the database if it does not exist.
+        /// </summary>
+        /// <returns>True if the database was created successfully, otherwise false.</returns>
         private bool TryCreateDatabase()
         {
             // SQL to drop and recreate the database
@@ -204,6 +256,9 @@ namespace PrintPress.Controller
             return ExecuteNonQuery(nonQueryData, "master");
         }
 
+        /// <summary>
+        /// Verifies all tables defined in the database schema.
+        /// </summary>
         private void VerifyAll()
         {
             foreach (TableSchema table in Tables.AllTables)
@@ -212,6 +267,11 @@ namespace PrintPress.Controller
             }
         }
 
+        /// <summary>
+        /// Verifies the existence of a specific table in the database.
+        /// </summary>
+        /// <param name="schema">The schema of the table to verify.</param>
+        /// <returns>True if the table exists or was created successfully, otherwise false.</returns>
         protected bool VerifyTable(TableSchema schema)
         {
             SqlCommandData<int> query = new SqlCommandData<int>()
@@ -241,10 +301,17 @@ namespace PrintPress.Controller
             {
                 return true;
             }
-              
+
             return false;
         }
 
+        /// <summary>
+        /// Adds an item to a table and retrieves the auto-generated ID of the new row.
+        /// </summary>
+        /// <param name="schema">The schema of the table to add the item to.</param>
+        /// <param name="values">The values to insert into the table.</param>
+        /// <param name="autoId">The auto-generated ID of the new row.</param>
+        /// <returns>True if the item was added successfully, otherwise false.</returns>
         protected bool AddItemGetId(TableSchema schema, object[] values, out int autoId)
         {
             int itemCount = values.Length;
@@ -270,6 +337,12 @@ namespace PrintPress.Controller
             return false;
         }
 
+        /// <summary>
+        /// Adds an item to a table.
+        /// </summary>
+        /// <param name="schema">The schema of the table to add the item to.</param>
+        /// <param name="values">The values to insert into the table.</param>
+        /// <returns>True if the item was added successfully, otherwise false.</returns>
         protected bool AddItem(TableSchema schema, object[] values)
         {
             int itemCount = schema.Columns.Length;
@@ -290,6 +363,12 @@ namespace PrintPress.Controller
             return ExecuteNonQuery(commandData);
         }
 
+        /// <summary>
+        /// Deletes an item from a table.
+        /// </summary>
+        /// <param name="schema">The schema of the table to delete the item from.</param>
+        /// <param name="values">The values identifying the row to delete.</param>
+        /// <returns>True if the item was deleted successfully, otherwise false.</returns>
         protected bool DeleteItem(TableSchema schema, string[] values)
         {
             int itemCount = schema.Columns.Length;
@@ -310,6 +389,14 @@ namespace PrintPress.Controller
             return ExecuteNonQuery(commandData);
         }
 
+        /// <summary>
+        /// Retrieves a single result from a query, verifying the associated table if necessary.
+        /// </summary>
+        /// <typeparam name="C">The type of the query result.</typeparam>
+        /// <param name="commandData">The query data to execute.</param>
+        /// <param name="tableSchema">The schema of the table to verify.</param>
+        /// <param name="result">The result of the query.</param>
+        /// <returns>A CommandReturnState indicating the result of the query.</returns>
         protected CommandReturnState GetSingleResult<C>(SqlCommandData<C> commandData, TableSchema tableSchema, out C result) where C : new()
         {
             result = new C();
@@ -322,6 +409,13 @@ namespace PrintPress.Controller
             return GetSingleResult(commandData, out result);
         }
 
+        /// <summary>
+        /// Retrieves a single result from a query.
+        /// </summary>
+        /// <typeparam name="C">The type of the query result.</typeparam>
+        /// <param name="commandData">The query data to execute.</param>
+        /// <param name="result">The result of the query.</param>
+        /// <returns>A CommandReturnState indicating the result of the query.</returns>
         protected CommandReturnState GetSingleResult<C>(SqlCommandData<C> commandData, out C result)
         {
             result = default;
@@ -341,6 +435,14 @@ namespace PrintPress.Controller
             return CommandReturnState.FOUND;
         }
 
+        /// <summary>
+        /// Retrieves multiple results from a query, verifying the associated table if necessary.
+        /// </summary>
+        /// <typeparam name="C">The type of the query result.</typeparam>
+        /// <param name="commandData">The query data to execute.</param>
+        /// <param name="tableSchema">The schema of the table to verify.</param>
+        /// <param name="results">The results of the query.</param>
+        /// <returns>A CommandReturnState indicating the result of the query.</returns>
         protected CommandReturnState GetMultiResult<C>(SqlCommandData<C> commandData, TableSchema tableSchema, out C[] results)
         {
             if (!VerifyTable(tableSchema))
@@ -351,7 +453,14 @@ namespace PrintPress.Controller
 
             return GetMultiResult(commandData, out results);
         }
-        protected CommandReturnState GetMultiResult<C>(SqlCommandData<C> commandData,  out C[] results)
+        /// <summary>
+        /// Executes a query that returns multiple results and categorizes the outcome as FOUND, NOTFOUND, or FAILED.
+        /// </summary>
+        /// <typeparam name="C">Type of the expected result data.</typeparam>
+        /// <param name="commandData">The query command data to execute.</param>
+        /// <param name="results">The resulting data array if the query succeeds.</param>
+        /// <returns>A CommandReturnState indicating the query result.</returns>
+        protected CommandReturnState GetMultiResult<C>(SqlCommandData<C> commandData, out C[] results)
         {
             bool readSuccess = ExecuteQuery(commandData, out results);
 
@@ -366,6 +475,11 @@ namespace PrintPress.Controller
             return CommandReturnState.FOUND;
         }
 
+        /// <summary>
+        /// Executes a SQL query and returns the resulting data as a DataTable object.
+        /// </summary>
+        /// <param name="sqlCommand">The SQL query string to execute.</param>
+        /// <returns>A DataTable containing the query result set.</returns>
         public DataTable GetData(string sqlCommand)
         {
             SqlConnection connection = new SqlConnection(_defaultConnectionBuilder.ConnectionString);
@@ -381,12 +495,19 @@ namespace PrintPress.Controller
             return table;
         }
 
+        /// <summary>
+        /// Executes a raw SQL command and returns the results as a single concatenated string.
+        /// </summary>
+        /// <param name="sqlString">The raw SQL command to execute.</param>
+        /// <param name="result">A string containing the concatenated results.</param>
+        /// <returns>A CommandReturnState indicating whether the command succeeded, failed, or found no results.</returns>
         public CommandReturnState SendSql(string sqlString, out string result)
         {
             SqlCommandData<string> commandData = new SqlCommandData<string>(
                 sqlString,
                 [],
-                reader => {
+                reader =>
+                {
                     StringBuilder sb = new StringBuilder();
 
                     for (int i = 0; i < reader.FieldCount; i++)
@@ -399,7 +520,6 @@ namespace PrintPress.Controller
                             case "nvarchar":
                                 sb.Append(reader.GetString(i));
                                 break;
-
                         }
                         sb.Append(", ");
                     }
@@ -428,6 +548,7 @@ namespace PrintPress.Controller
             result = resultBuilder.ToString();
             return CommandReturnState.FOUND;
         }
+
         #endregion
     }
 }

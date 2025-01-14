@@ -9,13 +9,35 @@ using System.Net.Mail;
 
 namespace PrintPress
 {
+    /// <summary>
+    /// Represents the main Launcher form, providing user authentication and client window management.
+    /// </summary>
     internal partial class Launcher : Form
-    {  
+    {
+        #region Fields and Properties
+
+        /// <summary>
+        /// Stores the currently logged-in user.
+        /// </summary>
         private EmployeeData? activeUser;
+
+        /// <summary>
+        /// Indicates whether admin override mode is active.
+        /// </summary>
         private bool adminOverride = false;
 
+        /// <summary>
+        /// Tracks currently active client windows.
+        /// </summary>
         private List<ClientWindow> activeClients = new List<ClientWindow>();
 
+        #endregion
+
+        #region Constructor
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="Launcher"/> class and sets up key event handling.
+        /// </summary>
         public Launcher()
         {
             InitializeComponent();
@@ -23,8 +45,13 @@ namespace PrintPress
             KeyDown += keyDownEvent;
         }
 
-        //// Event handelling
+        #endregion
 
+        #region Event Handlers
+
+        /// <summary>
+        /// Handles the click event for the Log In button.
+        /// </summary>
         private void LogInButton_Click(object sender, EventArgs e)
         {
             logInButton.Enabled = false;
@@ -41,14 +68,20 @@ namespace PrintPress
             logInButton.Enabled = true;
         }
 
+        /// <summary>
+        /// Handles the click event for the Launch button.
+        /// </summary>
         private void LaunchButton_Click(object sender, EventArgs e)
         {
             LaunchClient();
         }
 
+        /// <summary>
+        /// Handles the click event for the Admin label link.
+        /// </summary>
         private void adminLabel_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
         {
-            if ((activeUser == null || !activeUser.HasClearance(Department.Admin)) && adminOverride == false)
+            if ((activeUser == null || !activeUser.HasClearance(Department.Admin)) && !adminOverride)
             {
                 MessageBox.Show("Present valid admin credentials.");
                 return;
@@ -57,16 +90,20 @@ namespace PrintPress
             adminForm.ShowDialog();
         }
 
+        /// <summary>
+        /// Handles keydown events to toggle admin override.
+        /// </summary>
         private void keyDownEvent(object? sender, KeyEventArgs keyEventArgs)
         {
-            if (keyEventArgs.KeyValue == 67) // c key
+            if (keyEventArgs.KeyValue == 67) // 'C' key
             {
                 adminOverride = !adminOverride;
             }
         }
 
-        //// 
-
+        /// <summary>
+        /// Handles the closing event for client windows, removing them from the active client list.
+        /// </summary>
         private void OnClientClosing(object? sender, FormClosingEventArgs fcArgs)
         {
             if (sender == null)
@@ -84,14 +121,19 @@ namespace PrintPress
             }
         }
 
-        //// Helper functions
+        #endregion
 
+        #region Private Methods
+
+        /// <summary>
+        /// Launches a client window based on the selected department.
+        /// </summary>
         private void LaunchClient()
         {
             if (!DataTools.DepartmentString(clientComboBox.Text, out Department department) ||
                 activeUser == null || !activeUser.HasClearance(department))
             {
-                MessageBox.Show("Inavlid department selection");
+                MessageBox.Show("Invalid department selection.");
                 return;
             }
 
@@ -122,6 +164,9 @@ namespace PrintPress
             window.Show();
         }
 
+        /// <summary>
+        /// Removes any null entries from the active client list.
+        /// </summary>
         private void RemoveNullForms()
         {
             for (int i = 0; i < activeClients.Count; i++)
@@ -133,33 +178,31 @@ namespace PrintPress
             }
         }
 
+        /// <summary>
+        /// Checks if a client window for a specific department is already open.
+        /// </summary>
         private bool IsClientOpen(Department department)
         {
-            ClientWindow[] typeClients = activeClients.Where(x => x.Type == department).ToArray();
-            if (typeClients.Length > 0)
-            {
-                return true;
-            }
-            return false;
+            return activeClients.Any(x => x.Type == department);
         }
 
+        /// <summary>
+        /// Processes the log-in functionality, validating credentials and setting up the session.
+        /// </summary>
         private void ProcessLogIn()
         {
             bool validFormat = true;
             string statusMessage = string.Empty;
 
-            MailAddress mailAddress;
-            string password = passwordText.Text;
-
-            if (!ValidEmailFormat(emailText.Text, out mailAddress))
+            if (!ValidEmailFormat(emailText.Text, out MailAddress mailAddress))
             {
                 validFormat = false;
-                statusMessage = "invalid email";
+                statusMessage = "Invalid email.";
             }
-            else if (!ValidPasswordFormat(password))
+            else if (!ValidPasswordFormat(passwordText.Text))
             {
                 validFormat = false;
-                statusMessage = "invalid password";
+                statusMessage = "Invalid password.";
             }
 
             if (!validFormat)
@@ -169,53 +212,54 @@ namespace PrintPress
             }
 
             ClassifiedDataController classifiedDC = ClassifiedDataController.Instance;
-            bool valid = classifiedDC.ValidateCredentials(mailAddress, password, out string message, out EmployeeData employee);
-
-            if (!valid)
+            if (!classifiedDC.ValidateCredentials(mailAddress, passwordText.Text, out string message, out EmployeeData employee))
             {
                 UpdateStatusLabel(loginStatusLabel, message, StatusLabelColour.Red);
                 return;
             }
 
             activeUser = employee;
-
-            UpdateStatusLabel(loginStatusLabel, "Logged in as " + mailAddress.User, StatusLabelColour.Green);
-            UpdateStatusLabel(clientStatusLabel, "select client", StatusLabelColour.Grey);
+            UpdateStatusLabel(loginStatusLabel, $"Logged in as {mailAddress.User}", StatusLabelColour.Green);
+            UpdateStatusLabel(clientStatusLabel, "Select client", StatusLabelColour.Grey);
             emailText.Enabled = false;
             passwordText.Enabled = false;
             logInButton.Text = "Log Out";
             PopulateClientCombobox();
         }
 
+        /// <summary>
+        /// Processes the log-out functionality, resetting the session and UI.
+        /// </summary>
         private void ProcessLogOut()
         {
             activeUser = null;
-
-            UpdateStatusLabel(loginStatusLabel, "enter credentials", StatusLabelColour.Grey);
-            UpdateStatusLabel(clientStatusLabel, "log in to launch client", StatusLabelColour.Grey);
+            UpdateStatusLabel(loginStatusLabel, "Enter credentials", StatusLabelColour.Grey);
+            UpdateStatusLabel(clientStatusLabel, "Log in to launch client", StatusLabelColour.Grey);
             emailText.Enabled = true;
             passwordText.Enabled = true;
             logInButton.Text = "Log In";
-            passwordText.Text = string.Empty;
+            passwordText.Clear();
             clientComboBox.Items.Clear();
             launchButton.Enabled = false;
         }
 
+        /// <summary>
+        /// Updates the specified label with a new message and color.
+        /// </summary>
         private void UpdateStatusLabel(Label label, string message, StatusLabelColour colour)
         {
             label.Text = message;
-            switch (colour)
+            label.ForeColor = colour switch
             {
-                default:
-                case StatusLabelColour.Grey:
-                    label.ForeColor = SystemColors.ControlDarkDark; break;
-                case StatusLabelColour.Red:
-                    label.ForeColor = Color.Firebrick; break;
-                case StatusLabelColour.Green:
-                    label.ForeColor = Color.Green; break;
-            }
+                StatusLabelColour.Red => Color.Firebrick,
+                StatusLabelColour.Green => Color.Green,
+                _ => SystemColors.ControlDarkDark
+            };
         }
 
+        /// <summary>
+        /// Populates the client selection combo box with available departments for the active user.
+        /// </summary>
         private void PopulateClientCombobox()
         {
             clientComboBox.Items.Clear();
@@ -237,19 +281,22 @@ namespace PrintPress
             }
         }
 
+        /// <summary>
+        /// Validates the format of an email address.
+        /// </summary>
         private bool ValidEmailFormat(string email, out MailAddress mailAddress)
         {
             return MailAddress.TryCreate(email, out mailAddress);
         }
 
-        private bool ValidPasswordFormat(string passsword)
+        /// <summary>
+        /// Validates the format of a password.
+        /// </summary>
+        private bool ValidPasswordFormat(string password)
         {
-            if (string.IsNullOrEmpty(passsword) ||
-                passsword.Length < 3)
-            {
-                return false;
-            }
-            return true;
+            return !string.IsNullOrEmpty(password) && password.Length >= 3;
         }
+
+        #endregion
     }
 }
