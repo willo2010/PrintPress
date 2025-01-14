@@ -15,28 +15,16 @@ namespace PrintPress.Controller
     public class CommercialDataController : DataController<CommercialDataController>
     {
         // Define the table schema type for the DataController specification
-        protected override CommercialTableSchema Tables { get { return new CommercialTableSchema(); } }
+        private CommercialDatabaseSchema _schema;
+        protected override CommercialDatabaseSchema Tables { get { return _schema; } }
 
         /// <summary>
         /// Initialises DataController for the Commercial Database
         /// </summary>
         public override void Initialise()
         {
+            _schema = new CommercialDatabaseSchema();
             Initialise("CommercialData");
-        }
-
-        /// <summary>
-        /// Overriding method to check all tables are functioning on the database
-        /// </summary>
-        protected override void VerifyAll()
-        {
-            VerifyTable(Tables.Employee);
-            VerifyTable(Tables.Person);
-            VerifyTable(Tables.Address);
-            VerifyTable(Tables.Clearance);
-            VerifyTable(Tables.Content);
-            VerifyTable(Tables.Story);
-            VerifyTable(Tables.Advert);
         }
 
         /// <summary>

@@ -10,22 +10,16 @@ namespace PrintPress.Controller
     public class ClassifiedDataController : DataController<ClassifiedDataController>
     {
         // Define the table schema type for the DataController specification
-        protected override ClassifiedTableSchema Tables { get { return new ClassifiedTableSchema(); } }
+        private ClassifiedDatabaseSchema _schema;
+        protected override ClassifiedDatabaseSchema Tables { get { return _schema; } }
 
         /// <summary>
         /// Initialises DataController for the Commercial Database
         /// </summary>
         public override void Initialise()
         {
+            _schema = new ClassifiedDatabaseSchema();
             Initialise("ClassifiedData");
-        }
-
-        /// <summary>
-        /// Overriding method to check all tables are functioning on the database
-        /// </summary>
-        protected override void VerifyAll()
-        {
-            VerifyTable(Tables.CredentialTable);
         }
 
         /// <summary>

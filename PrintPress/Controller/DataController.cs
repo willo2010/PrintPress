@@ -18,7 +18,8 @@ namespace PrintPress.Controller
 
         protected static bool _initialised = false;
         protected static T1? _instance;
-        protected abstract object Tables { get; }
+
+        protected abstract IDatabaseSchema Tables { get; }
 
         public static T1 Instance
         {
@@ -202,7 +203,15 @@ namespace PrintPress.Controller
             // Execute the SQL command
             return ExecuteNonQuery(nonQueryData, "master");
         }
-        protected abstract void VerifyAll();
+
+        private void VerifyAll()
+        {
+            foreach (TableSchema table in Tables.AllTables)
+            {
+                VerifyTable(table);
+            }
+        }
+
         protected bool VerifyTable(TableSchema schema)
         {
             SqlCommandData<int> query = new SqlCommandData<int>()

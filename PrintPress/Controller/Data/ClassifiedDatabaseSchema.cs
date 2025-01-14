@@ -1,7 +1,15 @@
 ﻿namespace PrintPress.Controller.Data
 {
-    public class ClassifiedTableSchema
+    public class ClassifiedDatabaseSchema : IDatabaseSchema
     {
+        public TableSchema[] AllTables 
+        { 
+            get
+            {
+                return [CredentialTable];
+            }
+        }
+
         public TableSchema CredentialTable { get { return credentialTable; } }
 
         private static readonly TableSchema credentialTable = new TableSchema(

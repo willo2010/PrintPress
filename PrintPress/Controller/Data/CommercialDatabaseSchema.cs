@@ -2,8 +2,23 @@
 
 namespace PrintPress.Controller.Data
 {
-    public class CommercialTableSchema
+    public class CommercialDatabaseSchema : IDatabaseSchema
     {
+        public TableSchema[] AllTables
+        {
+            get
+            {
+                return [
+                    Employee,
+                    Person,
+                    Address,
+                    Clearance,
+                    Content,
+                    Story,
+                    Advert];
+            }
+        }
+
         public TableSchema Employee { get { return employeeTable; } }
         public TableSchema Person { get { return personTable; } }
         public TableSchema Address { get { return addressTable; } }

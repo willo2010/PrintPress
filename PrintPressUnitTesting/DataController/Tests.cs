@@ -7,18 +7,21 @@ using PrintPress.Data.Enum;
 using PrintPress.UICommand.ContentCommand;
 using PrintPress.UICommand.ContentCommand.Journalism;
 using PrintPress.UIService;
-using System;
-using System.Collections.Generic;
-using System.Linq;
+using PrintPressUnitTesting.DataController.Tools;
 using System.Net.Mail;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace PrintPressUnitTesting.DataController
 {
     [TestClass]
     public sealed class Tests
     {
+        [TestInitialize]
+        public void Setup()
+        {
+            ClassifiedDataController.Instance.Initialise();
+            MockDataController.Instance.Initialise();
+        }
+
         [TestMethod]
         public void ValidateCredentials_InvalidCredentials_ReturnsFalse()
         {
@@ -62,8 +65,6 @@ namespace PrintPressUnitTesting.DataController
         {
             // Arrange
             CommercialDataController controller = CommercialDataController.Instance;
-            controller.Initialise();
-
             MailAddress validEmail = new MailAddress("test@example.com");
             EmployeeData employee;
             string message;
@@ -80,6 +81,7 @@ namespace PrintPressUnitTesting.DataController
         public void ClientService_ExecuteHistory_PushesExecutedCommand()
         {
             // Arrange
+            CommercialDataController.Instance.Initialise();
             JournalismService service = new JournalismService(new EmployeeData(1));
             AddStoryCommand command = new AddStoryCommand(service);
 
@@ -92,10 +94,29 @@ namespace PrintPressUnitTesting.DataController
         }
 
         [TestMethod]
+        public void SortContentByDate_SortsCorrectly()
+        {
+            // Arrange
+            var service = new MockJournalismService(new EmployeeData());
+            var content1 = new StoryData(1, new EmployeeData(), "Text1", "Title1", null, "Notes1", "Comments1", ContentState.IN_PROGRESS, DateTime.Now.AddDays(-2), "Source1");
+            var content2 = new StoryData(2, new EmployeeData(), "Text2", "Title2", null, "Notes2", "Comments2", ContentState.IN_PROGRESS, DateTime.Now, "Source2");
+
+            List<ContentData> unsorted = new List<ContentData> { content2, content1 };
+
+            // Act
+            List<ContentData> sorted = service.TestSortContentByDate(unsorted);
+
+            // Assert
+            Assert.AreEqual(content1, sorted.First(), "Expected oldest content to appear first.");
+            Assert.AreEqual(content2, sorted.Last(), "Expected newest content to appear last.");
+        }
+
+        [TestMethod]
         public void ExecuteNonQuery_InvalidQuery_ReturnsFalse()
         {
             // Arrange
-            CommercialDataController controller = CommercialDataController.Instance;
+            MockDataController controller = MockDataController.Instance;
+
             SqlCommandData<object> invalidCommand = new SqlCommandData<object>
             {
                 queryString = "INVALID SQL QUERY",

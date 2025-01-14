@@ -9,7 +9,7 @@ namespace PrintPress.UIService.Abstract
     /// <typeparam name="T"></typeparam>
     public abstract class ContentService<T> : ClientService<T> where T : ContentService<T>
     {
-        // Properties
+        #region Properties
 
         public abstract ContentData? ActiveContent { get; }
         public abstract Dictionary<int, StoryData> GetContentList { get; }
@@ -43,12 +43,14 @@ namespace PrintPress.UIService.Abstract
                 OnTabStatusMessageChanged();
             }
         }
-
-        // Constructors
+        
+        #endregion
+        #region Constructors
 
         public ContentService(EmployeeData employee) : base(employee) { }
 
-        // Event handling
+        #endregion
+        #region Event handling
 
         public event EventHandler<EventArgs>? ContentListChanged;
         protected virtual void OnContentListChanged()
@@ -72,7 +74,8 @@ namespace PrintPress.UIService.Abstract
             ActiveChanged?.Invoke(this, new EventArgs());
         }
 
-        // Helper functions
+        #endregion
+        #region Helper functions
 
         protected Dictionary<int,C> SortContents<C>(C[] contents) where C : ContentData
         {
@@ -90,5 +93,7 @@ namespace PrintPress.UIService.Abstract
             contentList.Sort((x, y) => x.LastSaved.CompareTo(y.LastSaved));
             return contentList;
         }
+
+        #endregion
     }
 }
